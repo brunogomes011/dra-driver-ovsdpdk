@@ -1,0 +1,157 @@
+/*
+ * Copyright 2026 Red Hat, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/urfave/cli/v2"
+
+	"k8s.io/klog/v2"
+
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/flags"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/types"
+)
+
+const (
+	defaultKubeletRegistrarDir = "/var/lib/kubelet/plugins_registry"
+	defaultKubeletPluginsDir   = "/var/lib/kubelet/plugins"
+)
+
+func main() {
+	if err := newApp().Run(os.Args); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func newApp() *cli.App {
+	f := &types.Flags{
+		LoggingConfig: flags.NewLoggingConfig(),
+	}
+
+	cliFlags := []cli.Flag{
+		&cli.StringFlag{
+			Name:        "node-name",
+			Usage:       "The name of the node on which the driver is running.",
+			Required:    true,
+			Destination: &f.NodeName,
+			EnvVars:     []string{"NODE_NAME"},
+		},
+		&cli.StringFlag{
+			Name:        "namespace",
+			Usage:       "Namespace where the driver watches for OvsDpdkResourcePolicy resources.",
+			Value:       consts.DefaultNamespace,
+			Destination: &f.Namespace,
+			EnvVars:     []string{"NAMESPACE"},
+		},
+		&cli.StringFlag{
+			Name:        "cdi-root",
+			Usage:       "Absolute path to the directory where CDI files will be generated.",
+			Value:       "/var/run/cdi",
+			Destination: &f.CdiRoot,
+			EnvVars:     []string{"CDI_ROOT"},
+		},
+		&cli.StringFlag{
+			Name:        "kubelet-registrar-directory-path",
+			Usage:       "Absolute path to the directory where kubelet stores plugin registrations.",
+			Value:       defaultKubeletRegistrarDir,
+			Destination: &f.KubeletRegistrarDirectoryPath,
+			EnvVars:     []string{"KUBELET_REGISTRAR_DIRECTORY_PATH"},
+		},
+		&cli.StringFlag{
+			Name:        "kubelet-plugins-directory-path",
+			Usage:       "Absolute path to the directory where kubelet stores plugin data.",
+			Value:       defaultKubeletPluginsDir,
+			Destination: &f.KubeletPluginsDirectoryPath,
+			EnvVars:     []string{"KUBELET_PLUGINS_DIRECTORY_PATH"},
+		},
+	}
+	cliFlags = append(cliFlags, f.KubeClientConfig.Flags()...)
+	cliFlags = append(cliFlags, f.LoggingConfig.Flags()...)
+
+	app := &cli.App{
+		Name:            "dra-driver-ovsdpdk",
+		Usage:           "dra-driver-ovsdpdk implements a DRA driver for OVS-DPDK vhost-user ports.",
+		ArgsUsage:       " ",
+		HideHelpCommand: true,
+		Flags:           cliFlags,
+		Before: func(c *cli.Context) error {
+			if c.Args().Len() > 0 {
+				return fmt.Errorf("arguments not supported: %v", c.Args().Slice())
+			}
+			return f.LoggingConfig.Apply()
+		},
+		Action: func(c *cli.Context) error {
+			k8sClient, err := f.KubeClientConfig.NewCoreClient()
+			if err != nil {
+				return fmt.Errorf("create client: %v", err)
+			}
+
+			config := &types.Config{
+				Flags:     f,
+				K8sClient: k8sClient,
+			}
+
+			return run(c.Context, config)
+		},
+	}
+
+	return app
+}
+
+// run is the main entry point after flag parsing. It wires up all components
+// and blocks until a signal is received or a fatal error occurs.
+func run(ctx context.Context, config *types.Config) error {
+	logger := klog.FromContext(ctx).WithName("main")
+
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	defer stop()
+	ctx, cancel := context.WithCancelCause(ctx)
+	config.CancelMainCtx = cancel
+
+	if err := os.MkdirAll(config.DriverPluginPath(), 0750); err != nil {
+		return fmt.Errorf("create driver plugin path %q: %w", config.DriverPluginPath(), err)
+	}
+
+	if err := os.MkdirAll(config.Flags.CdiRoot, 0750); err != nil {
+		return fmt.Errorf("create CDI root %q: %w", config.Flags.CdiRoot, err)
+	}
+
+	logger.Info("Starting dra-driver-ovsdpdk",
+		"node", config.Flags.NodeName,
+		"namespace", config.Flags.Namespace,
+		"driverName", consts.DriverName,
+	)
+
+	// TBD
+
+	<-ctx.Done()
+	stop() // restore default signal handling as soon as possible
+	if err := context.Cause(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		logger.Error(err, "Shutting down due to error")
+		return err
+	}
+	logger.V(1).Info("Shutting down cleanly")
+	return nil
+}
