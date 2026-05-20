@@ -13,16 +13,3 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-package consts
-
-const (
-	// DriverName is the name of the DRA driver as registered with Kubernetes.
-	DriverName = "ovsdpdk.k8snetworkplumbingwg.io"
-
-	// GroupName is the API group name for this driver's CRDs.
-	GroupName = "ovsdpdk.k8snetworkplumbingwg.io"
-
-	// DefaultNamespace is the default namespace where the driver watches for OvsDpdkResourcePolicy resources.
-	DefaultNamespace = "dra-driver-ovsdpdk"
-)
