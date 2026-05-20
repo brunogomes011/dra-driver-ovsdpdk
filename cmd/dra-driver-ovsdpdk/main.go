@@ -33,6 +33,7 @@ import (
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/controller"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/devicestate"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/driver"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/flags"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/types"
 )
@@ -168,6 +169,11 @@ func run(ctx context.Context, config *types.Config) error {
 
 	devState := devicestate.New()
 
+	dvr, err := driver.New(ctx, config.K8sClient, config.Flags.NodeName, config.DriverPluginPath())
+	if err != nil {
+		return fmt.Errorf("create DRA driver: %w", err)
+	}
+
 	reconciler := controller.NewOvsDpdkResourcePolicyReconciler(
 		config.Manager.GetClient(),
 		config.Flags.NodeName,
@@ -196,6 +202,7 @@ func run(ctx context.Context, config *types.Config) error {
 
 	<-ctx.Done()
 	stop() // restore default signal handling as soon as possible
+	dvr.Stop()
 	if err := context.Cause(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error(err, "Shutting down due to error")
 		return err
