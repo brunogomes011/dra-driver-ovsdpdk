@@ -21,21 +21,29 @@ package devicestate
 import (
 	"context"
 	"fmt"
+	"maps"
 
+	resourceapi "k8s.io/api/resource/v1beta1"
 	"k8s.io/klog/v2"
 
 	ovsdpdkdrav1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsdpdkdra/v1alpha1"
 )
 
+// AllocatableDevices maps device names to their DRA device specifications.
+type AllocatableDevices map[string]resourceapi.Device
+
 // DeviceState manages the set of vhost-user devices advertised by this node.
 type DeviceState struct {
-	log klog.Logger
+	log               klog.Logger
+	republishCallback func(ctx context.Context) error
+	allocatable       AllocatableDevices
 }
 
 // New creates a new DeviceState.
 func New() *DeviceState {
 	return &DeviceState{
-		log: klog.Background().WithName("DeviceState"),
+		log:         klog.Background().WithName("DeviceState"),
+		allocatable: AllocatableDevices{},
 	}
 }
 
@@ -51,6 +59,17 @@ func (d *DeviceState) UpdateConfig(ctx context.Context, spec *ovsdpdkdrav1alpha1
 	return nil
 }
 
+// SetRepublishCallback sets a callback that is invoked after UpdatePolicyDevices
+// successfully updates the set of allocatable devices.
+func (d *DeviceState) SetRepublishCallback(callback func(ctx context.Context) error) {
+	d.republishCallback = callback
+}
+
+// GetAllocatableDevices returns a copy of the current set of allocatable devices.
+func (d *DeviceState) GetAllocatableDevices() AllocatableDevices {
+	return maps.Clone(d.allocatable)
+}
+
 // UpdatePolicyDevices is called by the controller whenever the set of matching
 // OvsDpdkResourcePolicy objects changes. bridges is the consolidated list of
 // bridge specs that apply to this node.
@@ -64,6 +83,15 @@ func (d *DeviceState) UpdatePolicyDevices(ctx context.Context, bridges []ovsdpdk
 			return fmt.Errorf("duplicate bridge name %q across OvsDpdkResourcePolicy objects", b.Name)
 		}
 		seen[b.Name] = struct{}{}
+	}
+
+	// TODO: compute and store allocatable devices here.
+
+	if d.republishCallback != nil {
+		if err := d.republishCallback(ctx); err != nil {
+			logger.Error(err, "Republish callback failed")
+			return fmt.Errorf("republish callback: %w", err)
+		}
 	}
 
 	return nil

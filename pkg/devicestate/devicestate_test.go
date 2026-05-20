@@ -17,10 +17,14 @@
 package devicestate_test
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	resourceapi "k8s.io/api/resource/v1beta1"
 
 	ovsdpdkdrav1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsdpdkdra/v1alpha1"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/devicestate"
@@ -36,6 +40,58 @@ var _ = Describe("DeviceState", func() {
 
 	BeforeEach(func() {
 		ds = devicestate.New()
+	})
+
+	Describe("GetAllocatableDevices", func() {
+		It("should return an empty non-nil map when no devices are set", func() {
+			devices := ds.GetAllocatableDevices()
+			Expect(devices).NotTo(BeNil())
+			Expect(devices).To(BeEmpty())
+		})
+
+		It("should return a copy that does not affect internal state when modified", func() {
+			devices := ds.GetAllocatableDevices()
+			devices["injected"] = resourceapi.Device{}
+			Expect(ds.GetAllocatableDevices()).To(BeEmpty())
+		})
+	})
+
+	Describe("SetRepublishCallback", func() {
+		It("should not call the callback during UpdatePolicyDevices if not set", func(ctx SpecContext) {
+			Expect(ds.UpdatePolicyDevices(ctx, nil)).To(Succeed())
+		})
+
+		It("should call the callback after a successful UpdatePolicyDevices", func(ctx SpecContext) {
+			called := false
+			ds.SetRepublishCallback(func(_ context.Context) error {
+				called = true
+				return nil
+			})
+			Expect(ds.UpdatePolicyDevices(ctx, nil)).To(Succeed())
+			Expect(called).To(BeTrue())
+		})
+
+		It("should propagate callback errors back to the caller", func(ctx SpecContext) {
+			callbackErr := errors.New("publish failed")
+			ds.SetRepublishCallback(func(_ context.Context) error {
+				return callbackErr
+			})
+			Expect(ds.UpdatePolicyDevices(ctx, nil)).To(MatchError(ContainSubstring("publish failed")))
+		})
+
+		It("should not call the callback when bridge validation fails", func(ctx SpecContext) {
+			called := false
+			ds.SetRepublishCallback(func(_ context.Context) error {
+				called = true
+				return nil
+			})
+			bridges := []ovsdpdkdrav1alpha1.BridgeSpec{
+				{Name: "br0"},
+				{Name: "br0"},
+			}
+			Expect(ds.UpdatePolicyDevices(ctx, bridges)).NotTo(Succeed())
+			Expect(called).To(BeFalse())
+		})
 	})
 
 	Describe("UpdatePolicyDevices", func() {
