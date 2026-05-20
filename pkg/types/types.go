@@ -20,6 +20,7 @@ import (
 	"context"
 
 	coreclientset "k8s.io/client-go/kubernetes"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/flags"
@@ -40,6 +41,7 @@ type Flags struct {
 type Config struct {
 	Flags         *Flags
 	K8sClient     coreclientset.Interface
+	Manager       ctrl.Manager
 	CancelMainCtx context.CancelCauseFunc
 }
 
