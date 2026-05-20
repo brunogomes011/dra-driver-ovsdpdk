@@ -17,6 +17,7 @@ MODULE      := github.com/amorenoz/dra-driver-ovsdpdk
 
 GOLANG_VERSION        ?= 1.24
 GOLANGCI_LINT_VERSION ?= v2.7.2
+CONTROLLER_GEN_VERSION ?= v0.21.0
 
 CONTAINER_TOOL ?= podman
 REGISTRY       ?= quay.io/amorenoz
@@ -28,7 +29,9 @@ GOARCH ?= amd64
 
 BIN_DIR := $(CURDIR)/bin
 
-.PHONY: all build binary check vet lint test coverage vendor build-image push-image
+APIS := ovsdpdkdra/v1alpha1
+
+.PHONY: all build binary check vet lint test coverage vendor generate generate-deepcopy generate-crds build-image push-image
 
 all: check test build
 
@@ -61,6 +64,30 @@ coverage: test
 
 vendor:
 	go mod vendor
+
+# ---- code generation ------------------------------------------------------
+
+CONTROLLER_GEN := $(BIN_DIR)/controller-gen
+
+generate: generate-deepcopy generate-crds
+
+generate-deepcopy: $(CONTROLLER_GEN)
+	for api in $(APIS); do \
+		rm -f $(CURDIR)/pkg/api/$${api}/zz_generated.deepcopy.go; \
+		$(CONTROLLER_GEN) \
+			object:headerFile=$(CURDIR)/hack/boilerplate.generatego.txt \
+			paths=$(CURDIR)/pkg/api/$${api}/; \
+	done
+
+generate-crds: $(CONTROLLER_GEN)
+	@mkdir -p $(CURDIR)/deployments/crds/
+	$(CONTROLLER_GEN) \
+		crd \
+		paths=$(CURDIR)/pkg/api/ovsdpdkdra/v1alpha1/ \
+		output:crd:dir=$(CURDIR)/deployments/crds/
+
+$(CONTROLLER_GEN):
+	GOBIN=$(BIN_DIR) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION)
 
 build-image:
 	$(CONTAINER_TOOL) build \
