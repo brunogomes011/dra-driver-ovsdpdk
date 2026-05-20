@@ -22,11 +22,15 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 
-	resourceapi "k8s.io/api/resource/v1beta1"
+	resourceapi "k8s.io/api/resource/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 
 	ovsdpdkdrav1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsdpdkdra/v1alpha1"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
 )
 
 // AllocatableDevices maps device names to their DRA device specifications.
@@ -85,7 +89,9 @@ func (d *DeviceState) UpdatePolicyDevices(ctx context.Context, bridges []ovsdpdk
 		seen[b.Name] = struct{}{}
 	}
 
-	// TODO: compute and store allocatable devices here.
+	d.allocatable = computeAllocatableDevices(bridges)
+	logger.Info("Allocatable devices updated", "bridges", slices.Collect(maps.Keys(d.allocatable)))
+	logger.V(2).Info("Allocatable devices updated", "devices", d.allocatable)
 
 	if d.republishCallback != nil {
 		if err := d.republishCallback(ctx); err != nil {
@@ -95,4 +101,33 @@ func (d *DeviceState) UpdatePolicyDevices(ctx context.Context, bridges []ovsdpdk
 	}
 
 	return nil
+}
+
+// computeAllocatableDevices converts a list of bridge specs into DRA device specifications.
+func computeAllocatableDevices(bridges []ovsdpdkdrav1alpha1.BridgeSpec) AllocatableDevices {
+	devices := make(AllocatableDevices, len(bridges))
+	for _, bridge := range bridges {
+		devices[bridge.Name] = bridgeToDevice(bridge)
+	}
+	return devices
+}
+
+func bridgeToDevice(bridge ovsdpdkdrav1alpha1.BridgeSpec) resourceapi.Device {
+	one := resource.NewQuantity(1, resource.DecimalSI)
+	return resourceapi.Device{
+		Name:                     bridge.Name,
+		AllowMultipleAllocations: ptr.To(true),
+		Capacity: map[resourceapi.QualifiedName]resourceapi.DeviceCapacity{
+			"ovsdpdk.k8snetworkplumbingwg.io/ports": {
+				Value: *resource.NewQuantity(consts.DefaultBridgeCapacity, resource.DecimalSI),
+				RequestPolicy: &resourceapi.CapacityRequestPolicy{
+					Default: one,
+					ValidRange: &resourceapi.CapacityRequestPolicyRange{
+						Min:  resource.NewQuantity(1, resource.DecimalSI),
+						Step: one,
+					},
+				},
+			},
+		},
+	}
 }

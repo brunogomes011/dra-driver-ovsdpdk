@@ -25,4 +25,7 @@ const (
 
 	// DefaultNamespace is the default namespace where the driver watches for OvsDpdkResourcePolicy resources.
 	DefaultNamespace = "dra-driver-ovsdpdk"
+
+	// DefaultBridgeCapacity is the default number of allocatable devices (ports) per bridge.
+	DefaultBridgeCapacity = 32 * 1024
 )

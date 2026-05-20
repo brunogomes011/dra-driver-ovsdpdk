@@ -24,9 +24,11 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	resourceapi "k8s.io/api/resource/v1beta1"
+	resourceapi "k8s.io/api/resource/v1"
+	"k8s.io/utils/ptr"
 
 	ovsdpdkdrav1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsdpdkdra/v1alpha1"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/devicestate"
 )
 
@@ -127,6 +129,57 @@ var _ = Describe("DeviceState", func() {
 			Expect(ds.UpdatePolicyDevices(ctx, bridges)).To(
 				MatchError(ContainSubstring(`"br-phy0"`)),
 			)
+		})
+
+		It("should produce one device per bridge with the correct name", func(ctx SpecContext) {
+			bridges := []ovsdpdkdrav1alpha1.BridgeSpec{
+				{Name: "br0"},
+				{Name: "br1"},
+			}
+			Expect(ds.UpdatePolicyDevices(ctx, bridges)).To(Succeed())
+			devices := ds.GetAllocatableDevices()
+			Expect(devices).To(HaveLen(2))
+			Expect(devices).To(HaveKey("br0"))
+			Expect(devices).To(HaveKey("br1"))
+			Expect(devices["br0"].Name).To(Equal("br0"))
+			Expect(devices["br1"].Name).To(Equal("br1"))
+		})
+
+		It("should set consumable capacity to DefaultBridgeCapacity and allow multiple allocations", func(ctx SpecContext) {
+			bridges := []ovsdpdkdrav1alpha1.BridgeSpec{{Name: "br0"}}
+			Expect(ds.UpdatePolicyDevices(ctx, bridges)).To(Succeed())
+			device := ds.GetAllocatableDevices()["br0"]
+			Expect(device.AllowMultipleAllocations).To(Equal(ptr.To(true)))
+			cap, ok := device.Capacity["ovsdpdk.k8snetworkplumbingwg.io/ports"]
+			Expect(ok).To(BeTrue())
+			Expect(cap.Value.Value()).To(Equal(int64(consts.DefaultBridgeCapacity)))
+		})
+
+		It("should replace allocatable devices on successive calls", func(ctx SpecContext) {
+			Expect(ds.UpdatePolicyDevices(ctx, []ovsdpdkdrav1alpha1.BridgeSpec{
+				{Name: "br0"}, {Name: "br1"},
+			})).To(Succeed())
+			Expect(ds.GetAllocatableDevices()).To(HaveLen(2))
+
+			Expect(ds.UpdatePolicyDevices(ctx, []ovsdpdkdrav1alpha1.BridgeSpec{
+				{Name: "br2"},
+			})).To(Succeed())
+			devices := ds.GetAllocatableDevices()
+			Expect(devices).To(HaveLen(1))
+			Expect(devices).To(HaveKey("br2"))
+		})
+
+		It("should leave allocatable devices unchanged when validation fails", func(ctx SpecContext) {
+			Expect(ds.UpdatePolicyDevices(ctx, []ovsdpdkdrav1alpha1.BridgeSpec{
+				{Name: "br0"},
+			})).To(Succeed())
+
+			Expect(ds.UpdatePolicyDevices(ctx, []ovsdpdkdrav1alpha1.BridgeSpec{
+				{Name: "br1"}, {Name: "br1"},
+			})).NotTo(Succeed())
+			devices := ds.GetAllocatableDevices()
+			Expect(devices).To(HaveLen(1))
+			Expect(devices).To(HaveKey("br0"))
 		})
 	})
 })
