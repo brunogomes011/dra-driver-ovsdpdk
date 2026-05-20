@@ -185,7 +185,7 @@ func run(ctx context.Context, config *types.Config) error {
 
 	devState := devicestate.New()
 
-	dvr, err := driver.New(ctx, config.K8sClient, config.Flags.NodeName, config.DriverPluginPath())
+	dvr, err := driver.New(ctx, devState, config.K8sClient, config.Flags.NodeName, config.DriverPluginPath())
 	if err != nil {
 		return fmt.Errorf("create DRA driver: %w", err)
 	}
