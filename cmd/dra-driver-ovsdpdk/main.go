@@ -27,8 +27,12 @@ import (
 	"github.com/urfave/cli/v2"
 
 	"k8s.io/klog/v2"
+	ctrl "sigs.k8s.io/controller-runtime"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/controller"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/devicestate"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/flags"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/types"
 )
@@ -103,14 +107,32 @@ func newApp() *cli.App {
 			return f.LoggingConfig.Apply()
 		},
 		Action: func(c *cli.Context) error {
+			restCfg, err := f.KubeClientConfig.RestConfig()
+			if err != nil {
+				return fmt.Errorf("create REST config: %v", err)
+			}
+
 			k8sClient, err := f.KubeClientConfig.NewCoreClient()
 			if err != nil {
 				return fmt.Errorf("create client: %v", err)
 			}
 
+			mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
+				Scheme: flags.Scheme,
+				Metrics: metricsserver.Options{
+					BindAddress: "0", // disabled
+				},
+				HealthProbeBindAddress: "0", // disabled
+				LeaderElection:         false,
+			})
+			if err != nil {
+				return fmt.Errorf("create controller manager: %v", err)
+			}
+
 			config := &types.Config{
 				Flags:     f,
 				K8sClient: k8sClient,
+				Manager:   mgr,
 			}
 
 			return run(c.Context, config)
@@ -144,7 +166,33 @@ func run(ctx context.Context, config *types.Config) error {
 		"driverName", consts.DriverName,
 	)
 
-	// TBD
+	devState := devicestate.New()
+
+	reconciler := controller.NewOvsDpdkResourcePolicyReconciler(
+		config.Manager.GetClient(),
+		config.Flags.NodeName,
+		config.Flags.Namespace,
+		devState,
+	)
+	if err := reconciler.SetupWithManager(config.Manager); err != nil {
+		return fmt.Errorf("setup controller: %w", err)
+	}
+
+	mgrErrCh := make(chan error, 1)
+	go func() {
+		if err := config.Manager.Start(ctx); err != nil {
+			mgrErrCh <- fmt.Errorf("controller manager exited: %w", err)
+		}
+		close(mgrErrCh)
+	}()
+
+	select {
+	case <-ctx.Done():
+	case err := <-mgrErrCh:
+		if err != nil {
+			config.CancelMainCtx(err)
+		}
+	}
 
 	<-ctx.Done()
 	stop() // restore default signal handling as soon as possible
