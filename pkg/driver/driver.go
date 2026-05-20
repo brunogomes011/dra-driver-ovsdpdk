@@ -21,24 +21,33 @@ import (
 	"context"
 	"fmt"
 
+	resourceapi "k8s.io/api/resource/v1"
 	coreclientset "k8s.io/client-go/kubernetes"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
+	"k8s.io/dynamic-resource-allocation/resourceslice"
 	"k8s.io/klog/v2"
 
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/devicestate"
 )
 
 // Driver is the DRA kubelet plugin for OVS-DPDK vhost-user ports.
 type Driver struct {
-	log    klog.Logger
-	helper *kubeletplugin.Helper
+	log         klog.Logger
+	nodeName    string
+	deviceState *devicestate.DeviceState
+	helper      *kubeletplugin.Helper
 }
 
-// New creates a new Driver. Call Start to register it with kubelet.
-func New(ctx context.Context, kubeClient coreclientset.Interface, nodeName, pluginDataDir string) (*Driver, error) {
+// New creates a new Driver and registers it with kubelet.
+func New(ctx context.Context, devState *devicestate.DeviceState, kubeClient coreclientset.Interface, nodeName, pluginDataDir string) (*Driver, error) {
 	logger := klog.FromContext(ctx).WithName("driver")
 
-	d := &Driver{log: logger}
+	d := &Driver{
+		log:         logger,
+		nodeName:    nodeName,
+		deviceState: devState,
+	}
 
 	helper, err := kubeletplugin.Start(ctx, d,
 		kubeletplugin.DriverName(consts.DriverName),
@@ -51,8 +60,34 @@ func New(ctx context.Context, kubeClient coreclientset.Interface, nodeName, plug
 	}
 
 	d.helper = helper
+	d.deviceState.SetRepublishCallback(d.PublishResources)
 	d.log.Info("DRA driver started")
 	return d, nil
+}
+
+// PublishResources publishes the current set of allocatable devices as a
+// ResourceSlice to the Kubernetes API server.
+func (d *Driver) PublishResources(ctx context.Context) error {
+	logger := klog.FromContext(ctx).WithName("PublishResources")
+
+	allocatable := d.deviceState.GetAllocatableDevices()
+	devices := make([]resourceapi.Device, 0, len(allocatable))
+	for _, device := range allocatable {
+		devices = append(devices, device)
+	}
+
+	resources := resourceslice.DriverResources{
+		Pools: map[string]resourceslice.Pool{
+			d.nodeName: {
+				Slices: []resourceslice.Slice{
+					{Devices: devices},
+				},
+			},
+		},
+	}
+
+	logger.Info("Publishing resources", "devices", len(devices))
+	return d.helper.PublishResources(ctx, resources)
 }
 
 // Stop shuts down the DRA driver and deregisters from kubelet.
