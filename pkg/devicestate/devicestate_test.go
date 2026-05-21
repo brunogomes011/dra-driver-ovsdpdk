@@ -31,6 +31,10 @@ import (
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 
+	"os/user"
+	"strconv"
+	"syscall"
+
 	ovsdpdkdrav1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsdpdkdra/v1alpha1"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/cdi"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
@@ -481,6 +485,129 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 			err = ds.UnprepareResourceClaim(ctx, pd)
 			Expect(err).To(HaveOccurred())
 			Expect(err).To(MatchError(ContainSubstring("remove socket directory")))
+		})
+	})
+})
+
+var _ = Describe("DeviceState permissions", func() {
+	Describe("PrepareResourceClaim with permissions", func() {
+		It("should apply ownership to the socket directory when user and group are specified by name", func(ctx SpecContext) {
+			ds, hostRoot := newDeviceStateWithDirs()
+
+			u, err := user.Current()
+			Expect(err).NotTo(HaveOccurred())
+			g, err := user.LookupGroupId(u.Gid)
+			Expect(err).NotTo(HaveOccurred())
+
+			userID := ovsdpdkdrav1alpha1.NewUserGroupIDFromName(u.Username)
+			groupID := ovsdpdkdrav1alpha1.NewUserGroupIDFromName(g.Name)
+			Expect(ds.UpdatePolicyDevices(ctx, nil, &ovsdpdkdrav1alpha1.VhostUserSpec{
+				HostRootPath:      hostRoot,
+				ContainerRootPath: "/container",
+				User:              &userID,
+				Group:             &groupID,
+			})).To(Succeed())
+
+			claim := makeClaim("abcdef12-0000-0000-0000-000000000020", "pod-uid-perm", "claim-perm", "vhost-perm", "br0")
+			pd, _, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			info, err := os.Stat(pd.Mount.HostDir)
+			Expect(err).NotTo(HaveOccurred())
+			stat, ok := info.Sys().(*syscall.Stat_t)
+			Expect(ok).To(BeTrue())
+
+			expectedUID, _ := strconv.Atoi(u.Uid)
+			expectedGID, _ := strconv.Atoi(g.Gid)
+			Expect(int(stat.Uid)).To(Equal(expectedUID))
+			Expect(int(stat.Gid)).To(Equal(expectedGID))
+		})
+
+		It("should apply ownership when user and group are specified numerically", func(ctx SpecContext) {
+			ds, hostRoot := newDeviceStateWithDirs()
+
+			u, err := user.Current()
+			Expect(err).NotTo(HaveOccurred())
+			expectedUID, _ := strconv.Atoi(u.Uid)
+			expectedGID, _ := strconv.Atoi(u.Gid)
+
+			userID := ovsdpdkdrav1alpha1.NewUserGroupIDFromID(expectedUID)
+			groupID := ovsdpdkdrav1alpha1.NewUserGroupIDFromID(expectedGID)
+			Expect(ds.UpdatePolicyDevices(ctx, nil, &ovsdpdkdrav1alpha1.VhostUserSpec{
+				HostRootPath:      hostRoot,
+				ContainerRootPath: "/container",
+				User:              &userID,
+				Group:             &groupID,
+			})).To(Succeed())
+
+			claim := makeClaim("abcdef12-0000-0000-0000-000000000021", "pod-uid-num", "claim-num", "vhost-num", "br0")
+			pd, _, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			info, err := os.Stat(pd.Mount.HostDir)
+			Expect(err).NotTo(HaveOccurred())
+			stat, ok := info.Sys().(*syscall.Stat_t)
+			Expect(ok).To(BeTrue())
+			Expect(int(stat.Uid)).To(Equal(expectedUID))
+			Expect(int(stat.Gid)).To(Equal(expectedGID))
+		})
+
+		It("should create the socket directory with mode 0775 regardless of process umask", func(ctx SpecContext) {
+			ds, hostRoot := newDeviceStateWithDirs()
+			Expect(ds.UpdatePolicyDevices(ctx, nil, &ovsdpdkdrav1alpha1.VhostUserSpec{
+				HostRootPath:      hostRoot,
+				ContainerRootPath: "/container",
+			})).To(Succeed())
+
+			// Set a restrictive umask that would strip group-write if chmod were not called.
+			old := syscall.Umask(0o022)
+			DeferCleanup(func() { syscall.Umask(old) })
+
+			claim := makeClaim("abcdef12-0000-0000-0000-000000000030", "pod-uid-umask", "claim-umask", "vhost-umask", "br0")
+			pd, _, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			info, err := os.Stat(pd.Mount.HostDir)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(info.Mode().Perm()).To(Equal(os.FileMode(0o775)))
+		})
+
+		It("should fail and clean up the socket directory when the user name does not exist", func(ctx SpecContext) {
+			ds, hostRoot := newDeviceStateWithDirs()
+
+			userID := ovsdpdkdrav1alpha1.NewUserGroupIDFromName("no-such-user-xyz")
+			Expect(ds.UpdatePolicyDevices(ctx, nil, &ovsdpdkdrav1alpha1.VhostUserSpec{
+				HostRootPath:      hostRoot,
+				ContainerRootPath: "/container",
+				User:              &userID,
+			})).To(Succeed())
+
+			podUID := k8stypes.UID("pod-uid-baduser")
+			claim := makeClaim("abcdef12-0000-0000-0000-000000000022", podUID, "claim-baduser", "vhost-baduser", "br0")
+			_, _, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("resolve user"))
+
+			// Socket directory must have been cleaned up.
+			socketDir := filepath.Join(hostRoot, string(podUID), "vhost-baduser")
+			_, statErr := os.Stat(socketDir)
+			Expect(os.IsNotExist(statErr)).To(BeTrue())
+		})
+
+		It("should fail with an invalid SELinux label format", func(ctx SpecContext) {
+			ds, hostRoot := newDeviceStateWithDirs()
+
+			label := "not-a-valid-label"
+			Expect(ds.UpdatePolicyDevices(ctx, nil, &ovsdpdkdrav1alpha1.VhostUserSpec{
+				HostRootPath:      hostRoot,
+				ContainerRootPath: "/container",
+				SelinuxLabel:      &label,
+			})).To(Succeed())
+
+			claim := makeClaim("abcdef12-0000-0000-0000-000000000023", "pod-uid-sel", "claim-sel", "vhost-sel", "br0")
+			_, _, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("invalid SELinux label"))
 		})
 	})
 })
