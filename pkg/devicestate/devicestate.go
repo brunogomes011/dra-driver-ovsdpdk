@@ -177,7 +177,7 @@ func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourcea
 	allocResult := results[0]
 
 	socketDir := getSocketDir(podUID, claim)
-	if err := d.socketFS.CreateSocketDir(socketDir); err != nil {
+	if err := d.socketFS.CreateSocketDir(ctx, socketDir, d.GetVhostUserConfig()); err != nil {
 		return nil, fmt.Errorf("create socket directory %q: %w", socketDir, err)
 	}
 

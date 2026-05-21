@@ -245,7 +245,7 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 
 		It("should return an error when the allocation has no results", func(ctx SpecContext) {
 			ds, mockFS, _ := newDeviceStateWithMockFS(ctx, nil)
-			mockFS.EXPECT().CreateSocketDir(mock.Anything).Return(nil).Maybe()
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 			mockFS.EXPECT().RemoveSocketDir(mock.Anything).Return(nil).Maybe()
 
 			claim := makeClaim("uid-4", "pod-uid-4", "claim-4", "vhost0", "br0")
@@ -261,7 +261,7 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 			podUID := k8stypes.UID("pod-uid-5")
 
 			expectedHostDir := filepath.Join(consts.HostRootPath, string(podUID)+"_"+"my-hand-written-claim")
-			mockFS.EXPECT().CreateSocketDir(expectedHostDir).Return(nil).Once()
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, expectedHostDir, mock.Anything).Return(nil).Once()
 
 			claim := makeClaim("uid-5", podUID, "my-hand-written-claim", "vhost0", "br0")
 			delete(claim.Annotations, resourceapi.PodResourceClaimAnnotation)
@@ -279,7 +279,7 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 			podClaimName := "vhost1"
 
 			expectedHostDir := filepath.Join(consts.HostRootPath, string(podUID)+"_"+podClaimName)
-			mockFS.EXPECT().CreateSocketDir(expectedHostDir).Return(nil).Once()
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, expectedHostDir, mock.Anything).Return(nil).Once()
 
 			claim := makeClaim("abcdef12-0000-0000-0000-000000000000", podUID, "my-pod-vhost1-xz123", podClaimName, "br0")
 			pd, err := ds.PrepareResourceClaim(ctx, claim)
@@ -290,7 +290,7 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 
 		It("should set Socket.HostPath to vhost.sock inside Mount.HostDir", func(ctx SpecContext) {
 			ds, mockFS, _ := newDeviceStateWithMockFS(ctx, nil)
-			mockFS.EXPECT().CreateSocketDir(mock.Anything).Return(nil).Once()
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 			claim := makeClaim("abcdef12-0000-0000-0000-000000000001", "pod-uid-sp", "claim-sp", "vhost-sp", "br0")
 			pd, err := ds.PrepareResourceClaim(ctx, claim)
@@ -303,7 +303,7 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 			ds, mockFS, _ := newDeviceStateWithMockFS(ctx, &ovsdpdkdrav1alpha1.VhostUserSpec{
 				ContainerRootPath: "/container/root",
 			})
-			mockFS.EXPECT().CreateSocketDir(mock.Anything).Return(nil).Once()
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 			claim := makeClaim("abcdef12-0000-0000-0000-000000000002", "pod-uid-cm", "claim-cm-xz456", "vhost2", "br0")
 			pd, err := ds.PrepareResourceClaim(ctx, claim)
@@ -313,7 +313,7 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 
 		It("should populate BridgeName from the allocation result device", func(ctx SpecContext) {
 			ds, mockFS, _ := newDeviceStateWithMockFS(ctx, nil)
-			mockFS.EXPECT().CreateSocketDir(mock.Anything).Return(nil).Once()
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 			claim := makeClaim("abcdef12-0000-0000-0000-000000000003", "pod-uid-bn", "claim-bn", "vhost-bn", "br-dpdk0")
 			pd, err := ds.PrepareResourceClaim(ctx, claim)
@@ -324,7 +324,7 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 		It("should populate Device with the correct CDI device ID", func(ctx SpecContext) {
 			ds, mockFS, _ := newDeviceStateWithMockFS(ctx, nil)
 			claimUID := k8stypes.UID("abcdef12-0000-0000-0000-000000000004")
-			mockFS.EXPECT().CreateSocketDir(mock.Anything).Return(nil).Once()
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 			claim := makeClaim(claimUID, "pod-uid-dev", "claim-dev", "vhost-dev", "br0")
 			pd, err := ds.PrepareResourceClaim(ctx, claim)
@@ -336,7 +336,7 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 		It("should write a CDI spec file on success", func(ctx SpecContext) {
 			ds, mockFS, _ := newDeviceStateWithMockFS(ctx, nil)
 			claimUID := k8stypes.UID("abcdef12-0000-0000-0000-000000000005")
-			mockFS.EXPECT().CreateSocketDir(mock.Anything).Return(nil).Once()
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 			claim := makeClaim(claimUID, "pod-uid-cdi", "claim-cdi", "vhost-cdi", "br0")
 			pd, err := ds.PrepareResourceClaim(ctx, claim)
@@ -350,19 +350,41 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 			ds, mockFS, cdiRoot := newDeviceStateWithMockFS(ctx, nil)
 			Expect(os.Chmod(cdiRoot, 0o555)).To(Succeed())
 
-			mockFS.EXPECT().CreateSocketDir(mock.Anything).Return(nil).Once()
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 			mockFS.EXPECT().RemoveSocketDir(mock.Anything).Return(nil).Once()
 
 			claim := makeClaim("abcdef12-0000-0000-0000-000000000006", "pod-uid-cleanup", "claim-cleanup-xz789", "vhost-cleanup", "br0")
 			_, err := ds.PrepareResourceClaim(ctx, claim)
 			Expect(err).To(HaveOccurred())
 		})
+
+		It("should forward the current VhostUserConfig permissions to CreateSocketDir", func(ctx SpecContext) {
+			spec1 := &ovsdpdkdrav1alpha1.VhostUserSpec{
+				User: ovsdpdkdrav1alpha1.NewUserGroupIDFromID(1000),
+			}
+			ds, mockFS, _ := newDeviceStateWithMockFS(ctx, spec1)
+
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, spec1).Return(nil).Once()
+
+			_, err := ds.PrepareResourceClaim(ctx, makeClaim("uid-perm-1", "pod-uid-p1", "claim-p1", "vhost-p1", "br0"))
+			Expect(err).NotTo(HaveOccurred())
+
+			spec2 := &ovsdpdkdrav1alpha1.VhostUserSpec{
+				User:  ovsdpdkdrav1alpha1.NewUserGroupIDFromID(2000),
+				Group: ovsdpdkdrav1alpha1.NewUserGroupIDFromID(2000),
+			}
+			Expect(ds.UpdateConfig(ctx, &ovsdpdkdrav1alpha1.OvsDpdkConfigSpec{VhostUser: spec2})).To(Succeed())
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, spec2).Return(nil).Once()
+
+			_, err = ds.PrepareResourceClaim(ctx, makeClaim("uid-perm-2", "pod-uid-p2", "claim-p2", "vhost-p2", "br0"))
+			Expect(err).NotTo(HaveOccurred())
+		})
 	})
 
 	Describe("UnprepareResourceClaim", func() {
 		It("should remove the socket directory and CDI spec on success", func(ctx SpecContext) {
 			ds, mockFS, _ := newDeviceStateWithMockFS(ctx, nil)
-			mockFS.EXPECT().CreateSocketDir(mock.Anything).Return(nil).Once()
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 			mockFS.EXPECT().RemoveSocketDir(mock.Anything).Return(nil).Once()
 
 			claim := makeClaim("abcdef12-0000-0000-0000-000000000010", "pod-uid-up", "claim-up", "vhost-up", "br0")
@@ -374,7 +396,7 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 
 		It("should return an error when the socket directory removal fails", func(ctx SpecContext) {
 			ds, mockFS, _ := newDeviceStateWithMockFS(ctx, nil)
-			mockFS.EXPECT().CreateSocketDir(mock.Anything).Return(nil).Once()
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 			mockFS.EXPECT().RemoveSocketDir(mock.Anything).Return(fmt.Errorf("remove socket directory: permission denied")).Once()
 
 			claim := makeClaim("abcdef12-0000-0000-0000-000000000011", "pod-uid-fail", "claim-fail", "vhost-fail", "br0")

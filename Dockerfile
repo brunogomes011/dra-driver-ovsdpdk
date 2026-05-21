@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ARG GOLANG_VERSION=1.24
+ARG GOLANG_VERSION=1.25
 FROM golang:${GOLANG_VERSION} AS builder
 
 WORKDIR /build
@@ -28,6 +28,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     ./cmd/dra-driver-ovsdpdk/
 
 FROM quay.io/centos/centos:stream9 AS runtime
+
+RUN dnf install -y acl && dnf clean all
 
 COPY --from=builder /dra-driver-ovsdpdk /usr/bin/dra-driver-ovsdpdk
 
