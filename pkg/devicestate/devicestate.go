@@ -37,6 +37,7 @@ import (
 	ovsdpdkdrav1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsdpdkdra/v1alpha1"
 	dracdi "github.com/amorenoz/dra-driver-ovsdpdk/pkg/cdi"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/permissions"
 	dratypes "github.com/amorenoz/dra-driver-ovsdpdk/pkg/types"
 )
 
@@ -52,13 +53,16 @@ type DeviceState struct {
 	allocatable       AllocatableDevices
 	vhostUserConfig   *ovsdpdkdrav1alpha1.VhostUserSpec
 	cdi               *dracdi.Handler
+	permApplier       *permissions.Applier
 }
 
 // New creates a new DeviceState with the given CDI handler.
 func New(cdi *dracdi.Handler) *DeviceState {
+	resolver := permissions.NewUserResolver()
 	ds := &DeviceState{
-		log: klog.Background().WithName("DeviceState"),
-		cdi: cdi,
+		log:         klog.Background().WithName("DeviceState"),
+		cdi:         cdi,
+		permApplier: permissions.NewApplier(resolver),
 	}
 	ds.updateConfig(make([]ovsdpdkdrav1alpha1.BridgeSpec, 0), nil)
 	return ds
@@ -163,7 +167,7 @@ func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourcea
 	}
 	allocResult := results[0]
 
-	socketDir, err := d.createSocketDir(d.getSocketDir(podUID, claim))
+	socketDir, err := d.createSocketDir(ctx, d.getSocketDir(podUID, claim))
 	if err != nil {
 		return nil, err
 	}
@@ -239,10 +243,19 @@ func (d *DeviceState) getSocketDir(podUID k8stypes.UID, claim *resourceapi.Resou
 	return filepath.Join(d.GetVhostUserConfig().HostRootPath, string(podUID)+"_"+getPodClaimName(claim))
 }
 
-func (d *DeviceState) createSocketDir(socketDir string) (string, error) {
+func (d *DeviceState) createSocketDir(ctx context.Context, socketDir string) (string, error) {
 	if err := os.MkdirAll(socketDir, 0o775); err != nil {
 		return "", fmt.Errorf("create socket directory %q: %w", socketDir, err)
 	}
+	if err := os.Chmod(socketDir, 0o775); err != nil {
+		return "", fmt.Errorf("chmod socket directory %q: %w", socketDir, err)
+	}
+
+	if err := d.permApplier.ApplyPermissions(ctx, socketDir, d.GetVhostUserConfig()); err != nil {
+		_ = d.removeSocketDir(socketDir)
+		return "", fmt.Errorf("apply permissions to %q: %w", socketDir, err)
+	}
+
 	return socketDir, nil
 }
 
