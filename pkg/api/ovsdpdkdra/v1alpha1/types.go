@@ -23,6 +23,11 @@ import (
 
 const DefaultBridgeCapacity = 32 * 1024
 
+const (
+	DefaultHostRootPath      = "/var/run/ovsdpdk"
+	DefaultContainerRootPath = "/var/run/ovsdpdk/vhost-user"
+)
+
 // OvsDpdkResourcePolicy defines the policy for advertising OVS bridges that the
 // driver will expose as DRA devices.
 //
@@ -45,6 +50,24 @@ type OvsDpdkResourcePolicySpec struct {
 	// Bridges is the list of OVS bridges exposed as DRA devices by this policy.
 	// +kubebuilder:validation:MinItems=1
 	Bridges []BridgeSpec `json:"bridges"`
+
+	// VhostUser configures the vhost-user socket directory paths used when
+	// preparing resource claims on this node.
+	// +optional
+	VhostUser *VhostUserSpec `json:"vhostUser,omitempty"`
+}
+
+// VhostUserSpec configures the host and container paths for vhost-user sockets.
+type VhostUserSpec struct {
+	// HostRootPath is the root directory on the host under which per-pod socket
+	// directories are created. Defaults to DefaultHostRootPath.
+	// +optional
+	HostRootPath string `json:"hostRootPath,omitempty"`
+
+	// ContainerRootPath is the path inside the container where the per-pod
+	// socket directory is mounted. Defaults to DefaultContainerRootPath.
+	// +optional
+	ContainerRootPath string `json:"containerRootPath,omitempty"`
 }
 
 // BridgeSpec defines a single OVS bridge to be exposed as a DRA device.

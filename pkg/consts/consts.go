@@ -25,4 +25,11 @@ const (
 
 	// DefaultNamespace is the default namespace where the driver watches for OvsDpdkResourcePolicy resources.
 	DefaultNamespace = "dra-driver-ovsdpdk"
+
+	// VhostSocketFilename is the name of the vhost-user socket file.
+	VhostSocketFilename = "vhost.sock"
+
+	// PodClaimNameAnnotation is the standard Kubernetes annotation set on a
+	// ResourceClaim that was created from a ResourceClaimTemplate.
+	PodClaimNameAnnotation = "resource.kubernetes.io/pod-claim-name"
 )

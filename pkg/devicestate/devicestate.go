@@ -22,30 +22,43 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
+	"sync"
 
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	k8stypes "k8s.io/apimachinery/pkg/types"
+	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 
 	ovsdpdkdrav1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsdpdkdra/v1alpha1"
+	dracdi "github.com/amorenoz/dra-driver-ovsdpdk/pkg/cdi"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
+	dratypes "github.com/amorenoz/dra-driver-ovsdpdk/pkg/types"
 )
 
 // AllocatableDevices maps device names to their DRA device specifications.
 type AllocatableDevices map[string]resourceapi.Device
 
-// DeviceState manages the set of vhost-user devices advertised by this node.
+// DeviceState manages the set of vhost-user devices advertised by this node
+// and owns the prepare/unprepare lifecycle for resource claims.
 type DeviceState struct {
+	mutex             sync.RWMutex
 	log               klog.Logger
 	republishCallback func(ctx context.Context) error
 	allocatable       AllocatableDevices
+	vhostUserConfig   *ovsdpdkdrav1alpha1.VhostUserSpec
+	cdi               *dracdi.Handler
 }
 
-// New creates a new DeviceState.
-func New() *DeviceState {
+// New creates a new DeviceState with the given CDI handler.
+func New(cdi *dracdi.Handler) *DeviceState {
 	return &DeviceState{
 		log: klog.Background().WithName("DeviceState"),
+		cdi: cdi,
 	}
 }
 
@@ -57,6 +70,8 @@ func (d *DeviceState) SetRepublishCallback(callback func(ctx context.Context) er
 
 // GetAllocatableDevices returns a copy of the current set of allocatable devices.
 func (d *DeviceState) GetAllocatableDevices() AllocatableDevices {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
 	result := make(AllocatableDevices, len(d.allocatable))
 	for k, v := range d.allocatable {
 		result[k] = v
@@ -64,10 +79,26 @@ func (d *DeviceState) GetAllocatableDevices() AllocatableDevices {
 	return result
 }
 
+// GetVhostUserConfig returns the effective vhost-user configuration. If no
+// policy has set one, defaults are returned.
+func (d *DeviceState) GetVhostUserConfig() *ovsdpdkdrav1alpha1.VhostUserSpec {
+	d.mutex.RLock()
+	defer d.mutex.RUnlock()
+	if d.vhostUserConfig != nil {
+		return d.vhostUserConfig
+	}
+	d.log.Info("No VhostUserSpec configured, using defaults")
+	return &ovsdpdkdrav1alpha1.VhostUserSpec{
+		HostRootPath:      ovsdpdkdrav1alpha1.DefaultHostRootPath,
+		ContainerRootPath: ovsdpdkdrav1alpha1.DefaultContainerRootPath,
+	}
+}
+
 // UpdatePolicyDevices is called by the controller whenever the set of matching
 // OvsDpdkResourcePolicy objects changes. bridges is the consolidated list of
-// bridge specs that apply to this node.
-func (d *DeviceState) UpdatePolicyDevices(ctx context.Context, bridges []ovsdpdkdrav1alpha1.BridgeSpec) error {
+// bridge specs that apply to this node. vhostUser is the first non-nil
+// VhostUserSpec found across matching policies (nil means use defaults).
+func (d *DeviceState) UpdatePolicyDevices(ctx context.Context, bridges []ovsdpdkdrav1alpha1.BridgeSpec, vhostUser *ovsdpdkdrav1alpha1.VhostUserSpec) error {
 	logger := klog.FromContext(ctx).WithName("UpdatePolicyDevices")
 	logger.Info("Updating policy devices", "bridges", len(bridges))
 
@@ -79,7 +110,11 @@ func (d *DeviceState) UpdatePolicyDevices(ctx context.Context, bridges []ovsdpdk
 		seen[b.Name] = struct{}{}
 	}
 
+	d.mutex.Lock()
 	d.allocatable = computeAllocatableDevices(bridges)
+	d.vhostUserConfig = vhostUser
+	d.mutex.Unlock()
+
 	logger.Info("Allocatable devices updated", "bridges", slices.Collect(maps.Keys(d.allocatable)))
 	logger.V(2).Info("Allocatable devices updated", "devices", d.allocatable)
 
@@ -90,6 +125,119 @@ func (d *DeviceState) UpdatePolicyDevices(ctx context.Context, bridges []ovsdpdk
 		}
 	}
 
+	return nil
+}
+
+// PrepareResourceClaim prepares a single resource claim. It creates the
+// per-claim socket directory, writes the CDI spec, and returns the kubelet
+// Device list together with the PreparedDevice record the caller must cache.
+func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourceapi.ResourceClaim) (*dratypes.PreparedDevice, []kubeletplugin.Device, error) {
+	logger := klog.FromContext(ctx).WithName("PrepareResourceClaim")
+
+	if claim.Status.Allocation == nil {
+		return nil, nil, fmt.Errorf("claim %s/%s has no allocation", claim.Namespace, claim.Name)
+	}
+	if len(claim.Status.ReservedFor) == 0 {
+		return nil, nil, fmt.Errorf("claim %s/%s has no ReservedFor entry", claim.Namespace, claim.Name)
+	} else if len(claim.Status.ReservedFor) > 1 {
+		return nil, nil, fmt.Errorf("multiple pods found for claim %s/%s not supported", claim.Namespace, claim.Name)
+	}
+	podUID := k8stypes.UID(claim.Status.ReservedFor[0].UID)
+	podClaimName := getPodClaimName(claim)
+
+	results := claim.Status.Allocation.Devices.Results
+	if len(results) != 1 {
+		return nil, nil, fmt.Errorf("claim %s/%s: expected exactly 1 allocation result, got %d", claim.Namespace, claim.Name, len(results))
+	}
+	allocResult := results[0]
+
+	socketDir, err := d.createSocketDir(d.getSocketDir(podUID, claim))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// TODO: Create OVS port
+
+	cdiDeviceID := dracdi.DeviceID(claim.UID)
+	containerDir := filepath.Join(d.GetVhostUserConfig().ContainerRootPath, podClaimName)
+
+	pd := &dratypes.PreparedDevice{
+		ClaimUID:   claim.UID,
+		ClaimName:  claim.Name,
+		BridgeName: allocResult.Device,
+		Mount: dratypes.MountInfo{
+			HostDir:      socketDir,
+			ContainerDir: containerDir,
+		},
+		Socket: dratypes.SocketInfo{
+			HostPath:      filepath.Join(socketDir, "vhost.sock"),
+			ContainerPath: filepath.Join(containerDir, "vhost.sock"),
+		},
+		CDIDeviceID: cdiDeviceID,
+	}
+
+	logger.Info("Prepared vhost-user socket",
+		"podUID", podUID,
+		"claimName", claim.Name,
+		"bridgeName", pd.BridgeName,
+		"mount", pd.Mount,
+		"socket", pd.Socket,
+	)
+
+	devices := []kubeletplugin.Device{
+		{
+			Requests:     []string{allocResult.Request},
+			PoolName:     allocResult.Pool,
+			DeviceName:   allocResult.Device,
+			CDIDeviceIDs: []string{cdiDeviceID},
+		},
+	}
+	pd.Devices = devices
+
+	if err := d.cdi.CreateClaimSpecFile(pd); err != nil {
+		_ = d.removeSocketDir(pd.Mount.HostDir)
+		// TODO: delete OVS port
+		return nil, nil, fmt.Errorf("create CDI spec for claim %s: %w", claim.UID, err)
+	}
+
+	return pd, devices, nil
+}
+
+// UnprepareResourceClaim removes the CDI spec and socket directory for a claim.
+func (d *DeviceState) UnprepareResourceClaim(ctx context.Context, pd *dratypes.PreparedDevice) error {
+	logger := klog.FromContext(ctx).WithName("UnprepareResourceClaim")
+
+	if err := d.cdi.DeleteClaimSpecFile(pd.ClaimUID); err != nil {
+		logger.Error(err, "Failed to delete CDI spec", "claimUID", pd.ClaimUID)
+		return fmt.Errorf("delete CDI spec for claim %s: %w", pd.ClaimUID, err)
+	}
+
+	// TODO: delete OVS port
+
+	if err := d.removeSocketDir(pd.Mount.HostDir); err != nil {
+		return err
+	}
+
+	logger.Info("Cleaned up claim resources", "claimUID", pd.ClaimUID, "socketDir", pd.Mount.HostDir)
+	return nil
+}
+
+func (d *DeviceState) getSocketDir(podUID k8stypes.UID, claim *resourceapi.ResourceClaim) string {
+	return filepath.Join(d.GetVhostUserConfig().HostRootPath, string(podUID)+"_"+getPodClaimName(claim))
+}
+
+func (d *DeviceState) createSocketDir(socketDir string) (string, error) {
+	if err := os.MkdirAll(socketDir, 0o775); err != nil {
+		return "", fmt.Errorf("create socket directory %q: %w", socketDir, err)
+	}
+	return socketDir, nil
+}
+
+func (d *DeviceState) removeSocketDir(socketDir string) error {
+	if err := os.RemoveAll(socketDir); err != nil {
+		d.log.Error(err, "Failed to remove socket directory", "socketDir", socketDir)
+		return fmt.Errorf("remove socket directory %q: %w", socketDir, err)
+	}
 	return nil
 }
 
@@ -120,4 +268,15 @@ func bridgeToDevice(bridge ovsdpdkdrav1alpha1.BridgeSpec) resourceapi.Device {
 			},
 		},
 	}
+}
+
+func getPodClaimName(claim *resourceapi.ResourceClaim) string {
+	// For claims created from a ResourceClaimTemplate the kubelet sets the
+	// pod-local claim name in a standard annotation. For hand-written claims
+	// the annotation is absent and claim.Name is already stable.
+	podClaimName := claim.Annotations[consts.PodClaimNameAnnotation]
+	if podClaimName == "" {
+		podClaimName = claim.Name
+	}
+	return podClaimName
 }

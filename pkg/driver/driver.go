@@ -29,6 +29,7 @@ import (
 
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/devicestate"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/podmanager"
 )
 
 // Driver is the DRA kubelet plugin for OVS-DPDK vhost-user ports.
@@ -36,6 +37,7 @@ type Driver struct {
 	log         klog.Logger
 	nodeName    string
 	deviceState *devicestate.DeviceState
+	podManager  *podmanager.PodManager
 	helper      *kubeletplugin.Helper
 }
 
@@ -47,6 +49,7 @@ func New(ctx context.Context, devState *devicestate.DeviceState, kubeClient core
 		log:         logger,
 		nodeName:    nodeName,
 		deviceState: devState,
+		podManager:  podmanager.New(),
 	}
 
 	helper, err := kubeletplugin.Start(ctx, d,

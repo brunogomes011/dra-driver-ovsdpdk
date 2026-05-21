@@ -93,8 +93,9 @@ func (r *OvsDpdkResourcePolicyReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, err
 	}
 
-	// Collect bridge specs from all policies whose NodeSelector matches this node.
+	// Collect bridge specs and vhost-user config from all matching policies.
 	var bridges []ovsdpdkdrav1alpha1.BridgeSpec
+	var vhostUser *ovsdpdkdrav1alpha1.VhostUserSpec
 	for i := range policyList.Items {
 		policy := &policyList.Items[i]
 		if !r.matchesNodeSelector(node.Labels, policy.Spec.NodeSelector) {
@@ -105,11 +106,14 @@ func (r *OvsDpdkResourcePolicyReconciler) Reconcile(ctx context.Context, req ctr
 		r.log.V(2).Info("Policy matches node, collecting bridges",
 			"policy", policy.Name, "bridges", len(policy.Spec.Bridges))
 		bridges = append(bridges, policy.Spec.Bridges...)
+		if vhostUser == nil && policy.Spec.VhostUser != nil {
+			vhostUser = policy.Spec.VhostUser
+		}
 	}
 
 	r.log.Info("Reconciled policies", "matchingBridges", len(bridges))
 
-	if err := r.deviceStateManager.UpdatePolicyDevices(ctx, bridges); err != nil {
+	if err := r.deviceStateManager.UpdatePolicyDevices(ctx, bridges, vhostUser); err != nil {
 		r.log.Error(err, "Failed to update policy devices")
 		return ctrl.Result{}, err
 	}
