@@ -146,6 +146,22 @@ spec:
                 - nodeSelectorTerms
                 type: object
                 x-kubernetes-map-type: atomic
+              vhostUser:
+                description: |-
+                  VhostUser configures the vhost-user socket directory paths used when
+                  preparing resource claims on this node.
+                properties:
+                  containerRootPath:
+                    description: |-
+                      ContainerRootPath is the path inside the container where the per-pod
+                      socket directory is mounted. Defaults to DefaultContainerRootPath.
+                    type: string
+                  hostRootPath:
+                    description: |-
+                      HostRootPath is the root directory on the host under which per-pod socket
+                      directories are created. Defaults to DefaultHostRootPath.
+                    type: string
+                type: object
             required:
             - bridges
             type: object

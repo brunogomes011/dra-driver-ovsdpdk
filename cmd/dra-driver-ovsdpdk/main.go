@@ -30,6 +30,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/cdi"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/controller"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/devicestate"
@@ -167,7 +168,8 @@ func run(ctx context.Context, config *types.Config) error {
 		"driverName", consts.DriverName,
 	)
 
-	devState := devicestate.New()
+	cdiHandler := cdi.New(config.Flags.CdiRoot)
+	devState := devicestate.New(cdiHandler)
 
 	dvr, err := driver.New(ctx, devState, config.K8sClient, config.Flags.NodeName, config.DriverPluginPath())
 	if err != nil {
