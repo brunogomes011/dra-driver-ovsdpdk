@@ -151,16 +151,43 @@ spec:
                   VhostUser configures the vhost-user socket directory paths used when
                   preparing resource claims on this node.
                 properties:
+                  aclUsers:
+                    description: |-
+                      ACLUsers is a list of user names granted access to the socket directory
+                      via filesystem ACLs (setfacl).
+                    items:
+                      type: string
+                    type: array
                   containerRootPath:
                     description: |-
                       ContainerRootPath is the path inside the container where the per-pod
                       socket directory is mounted. Defaults to DefaultContainerRootPath.
                     type: string
+                  group:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      Group is the owning group of the vhost-user socket directory. Can be
+                      specified as a group name (e.g. "qemu") or a numeric GID (e.g. 718).
+                    x-kubernetes-int-or-string: true
                   hostRootPath:
                     description: |-
                       HostRootPath is the root directory on the host under which per-pod socket
                       directories are created. Defaults to DefaultHostRootPath.
                     type: string
+                  selinuxLabel:
+                    description: SelinuxLabel is the SELinux label applied to the
+                      socket directory.
+                    type: string
+                  user:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      User is the owner of the vhost-user socket directory. Can be specified
+                      as a user name (e.g. "openvswitch") or a numeric UID (e.g. 107).
+                    x-kubernetes-int-or-string: true
                 type: object
             required:
             - bridges
