@@ -31,11 +31,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/cdi"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/controllers"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/devicestate"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/driver"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/flags"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/socketfs"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/types"
 )
 
@@ -183,7 +185,12 @@ func run(ctx context.Context, config *types.Config) error {
 		"driverName", consts.DriverName,
 	)
 
-	devState := devicestate.New()
+	cdiHandler, err := cdi.New(config.Flags.CdiRoot)
+	if err != nil {
+		return fmt.Errorf("create DRI Handler: %w", err)
+	}
+
+	devState := devicestate.New(cdiHandler, socketfs.New())
 
 	dvr, err := driver.New(ctx, devState, config.K8sClient, config.Flags.NodeName, config.DriverPluginPath())
 	if err != nil {

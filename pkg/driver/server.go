@@ -18,27 +18,72 @@ package driver
 
 import (
 	"context"
+	"fmt"
 
 	resourceapi "k8s.io/api/resource/v1"
-	"k8s.io/apimachinery/pkg/types"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
+	"k8s.io/klog/v2"
 )
 
-func (d *Driver) PrepareResourceClaims(ctx context.Context, claims []*resourceapi.ResourceClaim) (map[types.UID]kubeletplugin.PrepareResult, error) {
-	result := make(map[types.UID]kubeletplugin.PrepareResult, len(claims))
+func (d *Driver) PrepareResourceClaims(ctx context.Context, claims []*resourceapi.ResourceClaim) (map[k8stypes.UID]kubeletplugin.PrepareResult, error) {
+	logger := klog.FromContext(ctx).WithName("PrepareResourceClaims")
+	result := make(map[k8stypes.UID]kubeletplugin.PrepareResult, len(claims))
+
 	for _, claim := range claims {
-		result[claim.UID] = kubeletplugin.PrepareResult{}
+		logger.V(1).Info("Preparing claim", "claim", claim.UID, "name", claim.Name, "namespace", claim.Namespace)
+		logger.V(3).Info("Claim", "claim", claim)
+
+		if pd, found := d.podManager.Get(claim.UID); found {
+			logger.V(1).Info("Claim already prepared, returning cached result", "claim", claim.UID)
+			result[claim.UID] = kubeletplugin.PrepareResult{
+				Devices: []kubeletplugin.Device{pd.Device},
+			}
+			continue
+		}
+
+		pd, err := d.deviceState.PrepareResourceClaim(ctx, claim)
+		if err != nil {
+			logger.Error(err, "Failed to prepare claim", "claim", claim.UID)
+			result[claim.UID] = kubeletplugin.PrepareResult{Err: err}
+			return result, err
+		}
+
+		d.podManager.Set(claim.UID, pd)
+		result[claim.UID] = kubeletplugin.PrepareResult{
+			Devices: []kubeletplugin.Device{pd.Device},
+		}
+		logger.V(1).Info("Prepared claim", "claim", claim.UID, "name", claim.Name, "namespace", claim.Namespace, "result", pd)
 	}
+
 	return result, nil
 }
 
-func (d *Driver) UnprepareResourceClaims(ctx context.Context, claims []kubeletplugin.NamespacedObject) (map[types.UID]error, error) {
-	result := make(map[types.UID]error, len(claims))
+func (d *Driver) UnprepareResourceClaims(ctx context.Context, claims []kubeletplugin.NamespacedObject) (map[k8stypes.UID]error, error) {
+	logger := klog.FromContext(ctx).WithName("UnprepareResourceClaims")
+	result := make(map[k8stypes.UID]error, len(claims))
+
 	for _, claim := range claims {
+		logger.V(1).Info("Unprepareing claim", "claim", claim.UID, "name", claim.Name, "namespace", claim.Namespace)
+
+		pd := d.podManager.Delete(claim.UID)
+		if pd == nil {
+			logger.Info("Claim not found in pod manager, nothing to unprepare", "claim", claim.UID)
+			result[claim.UID] = nil
+			continue
+		}
+
+		if err := d.deviceState.UnprepareResourceClaim(ctx, pd); err != nil {
+			logger.Error(err, "Failed to unprepare claim", "claim", claim.UID)
+			result[claim.UID] = fmt.Errorf("unprepare claim %s: %w", claim.UID, err)
+			// Reinsert perpared device in cache so that future retires can continue.
+			d.podManager.Set(claim.UID, pd)
+			continue
+		}
+
 		result[claim.UID] = nil
+		logger.V(1).Info("Unprepared claim", "claim", claim.UID, "name", claim.Name, "namespace", claim.Namespace)
 	}
-	return result, nil
-}
 
-func (d *Driver) HandleError(ctx context.Context, err error, msg string) {
+	return result, nil
 }

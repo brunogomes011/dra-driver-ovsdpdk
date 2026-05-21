@@ -90,7 +90,7 @@ func (r *OvsDpdkResourcePolicyReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, err
 	}
 
-	// Collect bridge specs from all policies whose NodeSelector matches this node.
+	// Collect bridge specs from all matching policies.
 	var bridges []ovsdpdkdrav1alpha1.BridgeSpec
 	for _, policy := range policyList.Items {
 		if !r.matchesNodeSelector(nodeMeta, policy.Spec.NodeSelector) {

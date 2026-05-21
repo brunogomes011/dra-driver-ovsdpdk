@@ -32,6 +32,8 @@ type OvsDpdkConfig struct {
 
 // OvsDpdkConfig defines the desired configuration of the OVS-DPDK DRA Driver.
 type OvsDpdkConfigSpec struct {
+	// VhostUser configures the vhost-user socket directory options.
+	VhostUser *VhostUserSpec `json:"vhostUser,omitempty"`
 }
 
 // OvsDpdkConfigList contains a list of OvsDpdkConfig.
@@ -41,4 +43,12 @@ type OvsDpdkConfigList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []OvsDpdkConfig `json:"items"`
+}
+
+// VhostUserSpec configures the host and container paths for vhost-user sockets.
+type VhostUserSpec struct {
+	// ContainerRootPath is the path inside the container where the per-pod
+	// socket directory is mounted.
+	// +optional
+	ContainerRootPath string `json:"containerRootPath,omitempty"`
 }

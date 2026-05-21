@@ -40,6 +40,17 @@ spec:
           spec:
             description: OvsDpdkConfig defines the desired configuration of the OVS-DPDK
               DRA Driver.
+            properties:
+              vhostUser:
+                description: VhostUser configures the vhost-user socket directory
+                  options.
+                properties:
+                  containerRootPath:
+                    description: |-
+                      ContainerRootPath is the path inside the container where the per-pod
+                      socket directory is mounted.
+                    type: string
+                type: object
             type: object
         required:
         - spec
