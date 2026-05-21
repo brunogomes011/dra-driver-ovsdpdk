@@ -17,8 +17,13 @@
 package v1alpha1
 
 import (
+	"encoding/json"
+	"fmt"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 const DefaultBridgeCapacity = 32 * 1024
@@ -68,6 +73,101 @@ type VhostUserSpec struct {
 	// socket directory is mounted. Defaults to DefaultContainerRootPath.
 	// +optional
 	ContainerRootPath string `json:"containerRootPath,omitempty"`
+
+	// User is the owner of the vhost-user socket directory. Can be specified
+	// as a user name (e.g. "openvswitch") or a numeric UID (e.g. 107).
+	// +optional
+	User *UserGroupID `json:"user,omitempty"`
+
+	// Group is the owning group of the vhost-user socket directory. Can be
+	// specified as a group name (e.g. "qemu") or a numeric GID (e.g. 718).
+	// +optional
+	Group *UserGroupID `json:"group,omitempty"`
+
+	// SelinuxLabel is the SELinux label applied to the socket directory.
+	// +optional
+	SelinuxLabel *string `json:"selinuxLabel,omitempty"`
+
+	// ACLUsers is a list of user names granted access to the socket directory
+	// via filesystem ACLs (setfacl).
+	// +optional
+	ACLUsers []string `json:"aclUsers,omitempty"`
+}
+
+// UserGroupID represents a user or group identity that can be expressed either
+// as a name (e.g. "openvswitch") or as a numeric ID (e.g. 107).
+//
+// +kubebuilder:validation:XIntOrString
+type UserGroupID intstr.IntOrString
+
+// NewUserGroupIDFromName creates a UserGroupID from a string name.
+func NewUserGroupIDFromName(name string) UserGroupID {
+	return UserGroupID(intstr.FromString(name))
+}
+
+// NewUserGroupIDFromID creates a UserGroupID from a numeric ID.
+func NewUserGroupIDFromID(id int) UserGroupID {
+	return UserGroupID(intstr.FromInt32(int32(id)))
+}
+
+// IsName reports whether the identity was specified as a string name.
+func (u UserGroupID) IsName() bool {
+	return intstr.IntOrString(u).Type == intstr.String
+}
+
+// GetName returns the string name. It panics if the identity is not a name;
+// callers should check IsName() first.
+func (u UserGroupID) GetName() string {
+	ios := intstr.IntOrString(u)
+	if ios.Type != intstr.String {
+		panic("UserGroupID is not a name")
+	}
+	return ios.StrVal
+}
+
+// GetID returns the numeric ID. It panics if the identity is not an ID;
+// callers should check IsName() first.
+func (u UserGroupID) GetID() int {
+	ios := intstr.IntOrString(u)
+	if ios.Type != intstr.Int {
+		panic("UserGroupID is not an ID")
+	}
+	return int(ios.IntVal)
+}
+
+// UnmarshalJSON implements json.Unmarshaler. It accepts both a JSON number
+// (integer) and a JSON string.
+func (u *UserGroupID) UnmarshalJSON(data []byte) error {
+	// Try integer first.
+	var id int32
+	if err := json.Unmarshal(data, &id); err == nil {
+		*u = UserGroupID(intstr.FromInt32(id))
+		return nil
+	}
+
+	// Fall back to string.
+	var name string
+	if err := json.Unmarshal(data, &name); err == nil {
+		*u = UserGroupID(intstr.FromString(name))
+		return nil
+	}
+
+	return fmt.Errorf("userGroupID must be a string name or an integer ID, got: %s", string(data))
+}
+
+// MarshalJSON implements json.Marshaler. It preserves the original type.
+func (u UserGroupID) MarshalJSON() ([]byte, error) {
+	ios := intstr.IntOrString(u)
+	if ios.Type == intstr.String {
+		return json.Marshal(ios.StrVal)
+	}
+	return json.Marshal(ios.IntVal)
+}
+
+// DeepCopyInto copies the receiver into out. intstr.IntOrString is a value
+// type so a shallow copy is sufficient.
+func (u *UserGroupID) DeepCopyInto(out *UserGroupID) {
+	*out = *u
 }
 
 // BridgeSpec defines a single OVS bridge to be exposed as a DRA device.
