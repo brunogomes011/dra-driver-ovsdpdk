@@ -64,6 +64,14 @@ spec:
 - OVS-DPDK installed on worker nodes with the bridges already created.
 - A container registry reachable from the cluster nodes.
 
+### KIND cluster
+
+If you want to quickly experiment with the driver, you can create a kind cluster with:
+
+```bash
+kind create cluster --config deployments/kind-config.yaml
+```
+
 ### Build and push
 
 ```bash
@@ -161,22 +169,30 @@ The CEL selector pins scheduling to the node that owns `br-dpdk0`. After the
 pod starts, inspect the claim status for the exact socket paths:
 
 ```bash
-kubectl get resourceclaim -l resource.kubernetes.io/pod-claim-name=vhost \
-  -o jsonpath='{.items[0].status.devices[0].data}' | jq .
+kubectl get resourceclaim
+
+```
+```
+NAME                      STATE                AGE
+my-dpdk-pod-vhost-p5bzb   allocated,reserved   7m58s
+```
+```bash
+kubekubectl get resourceclaim my-dpdk-pod-vhost-p6bzb \
+  -o jsonpath='{.status.devices[0].data}' | jq .
 ```
 
 ```json
 {
+  "bridgeName": "br-dpdk0",
+  "cdiDeviceID": "ovsdpdk.k8snetworkplumbingwg.io/vhost-user=aaa85ca7",
   "mount": {
-    "hostDir":      "/var/run/ovsdpdk/<pod-uid>/vhost",
-    "containerDir": "/var/run/ovsdpdk/vhost-user/vhost"
+    "containerDir": "/var/run/ovsdpdk/vhost-user/vhost",
+    "hostDir": "/var/run/ovsdpdk/c362b1d7-d4ea-4efe-9e90-e4cd83131baf/vhost"
   },
   "socket": {
-    "hostPath":      "/var/run/ovsdpdk/<pod-uid>/vhost/vhost.sock",
-    "containerPath": "/var/run/ovsdpdk/vhost-user/vhost/vhost.sock"
-  },
-  "bridgeName":  "br-dpdk0",
-  "cdiDeviceID": "ovsdpdk.k8snetworkplumbingwg.io/vhost-user=..."
+    "containerPath": "/var/run/ovsdpdk/vhost-user/vhost/vhost.sock",
+    "hostPath": "/var/run/ovsdpdk/c362b1d7-d4ea-4efe-9e90-e4cd83131baf/vhost/vhost.sock"
+  }
 }
 ```
 
