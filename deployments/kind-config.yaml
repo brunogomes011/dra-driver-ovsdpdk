@@ -1,0 +1,14 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+featureGates:
+  DynamicResourceAllocation: true
+  DRAConsumableCapacity: true
+  DRAResourceClaimDeviceStatus: true
+nodes:
+  - role: control-plane
+  - role: worker
+    labels:
+      ovsdpdk-node: worker
+  - role: worker
+    labels:
+      ovsdpdk-node: worker
