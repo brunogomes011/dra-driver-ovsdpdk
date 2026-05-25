@@ -39,6 +39,7 @@ type Driver struct {
 	deviceState *devicestate.DeviceState
 	podManager  *podmanager.PodManager
 	helper      *kubeletplugin.Helper
+	client      coreclientset.Interface
 }
 
 // New creates a new Driver and registers it with kubelet.
@@ -50,6 +51,7 @@ func New(ctx context.Context, devState *devicestate.DeviceState, kubeClient core
 		nodeName:    nodeName,
 		deviceState: devState,
 		podManager:  podmanager.New(),
+		client:      kubeClient,
 	}
 
 	helper, err := kubeletplugin.Start(ctx, d,
