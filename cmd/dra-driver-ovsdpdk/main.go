@@ -27,6 +27,7 @@ import (
 	"github.com/urfave/cli/v2"
 
 	"k8s.io/klog/v2"
+	"k8s.io/klog/v2/textlogger"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -115,7 +116,13 @@ func newApp() *cli.App {
 			if c.Args().Len() > 0 {
 				return fmt.Errorf("arguments not supported: %v", c.Args().Slice())
 			}
-			return f.LoggingConfig.Apply()
+			if err := f.LoggingConfig.Apply(); err != nil {
+				return err
+			}
+			// Wire controller-runtime to use the same klog backend so its
+			// internal logs are not silently dropped.
+			ctrl.SetLogger(textlogger.NewLogger(textlogger.NewConfig()))
+			return nil
 		},
 		Action: func(c *cli.Context) error {
 			restCfg, err := f.KubeClientConfig.RestConfig()
