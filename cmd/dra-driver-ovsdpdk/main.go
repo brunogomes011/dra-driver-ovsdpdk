@@ -177,6 +177,7 @@ func run(ctx context.Context, config *types.Config) error {
 
 	cdiHandler := cdi.New(config.Flags.CdiRoot)
 	devState := devicestate.New(cdiHandler)
+	devState.SetKubeClient(config.K8sClient)
 
 	dvr, err := driver.New(ctx, devState, config.K8sClient, config.Flags.NodeName, config.DriverPluginPath())
 	if err != nil {

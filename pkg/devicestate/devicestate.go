@@ -20,6 +20,7 @@ package devicestate
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -29,7 +30,11 @@ import (
 
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	k8stypes "k8s.io/apimachinery/pkg/types"
+	coreclientset "k8s.io/client-go/kubernetes"
+	draclient "k8s.io/dynamic-resource-allocation/client"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
@@ -54,6 +59,16 @@ type DeviceState struct {
 	vhostUserConfig   *ovsdpdkdrav1alpha1.VhostUserSpec
 	cdi               *dracdi.Handler
 	permApplier       *permissions.Applier
+	draClient         *draclient.Client
+}
+
+// deviceStatusData is the driver-specific debug payload written into
+// ResourceClaim.Status.Devices[].Data after a successful prepare.
+type deviceStatusData struct {
+	Mount       dratypes.MountInfo  `json:"mount"`
+	Socket      dratypes.SocketInfo `json:"socket"`
+	BridgeName  string              `json:"bridgeName"`
+	CDIDeviceID string              `json:"cdiDeviceID"`
 }
 
 // New creates a new DeviceState with the given CDI handler.
@@ -64,6 +79,11 @@ func New(cdi *dracdi.Handler) *DeviceState {
 		cdi:         cdi,
 		permApplier: permissions.NewApplier(resolver),
 	}
+}
+
+// SetKubeClient sets the Kubernetes client used to update ResourceClaim status.
+func (d *DeviceState) SetKubeClient(client coreclientset.Interface) {
+	d.draClient = draclient.New(client)
 }
 
 // SetRepublishCallback sets a callback that is invoked after UpdatePolicyDevices
@@ -166,9 +186,10 @@ func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourcea
 	containerDir := filepath.Join(d.GetVhostUserConfig().ContainerRootPath, podClaimName)
 
 	pd := &dratypes.PreparedDevice{
-		ClaimUID:   claim.UID,
-		ClaimName:  claim.Name,
-		BridgeName: allocResult.Device,
+		ClaimUID:       claim.UID,
+		ClaimNamespace: claim.Namespace,
+		ClaimName:      claim.Name,
+		BridgeName:     allocResult.Device,
 		Mount: dratypes.MountInfo{
 			HostDir:      socketDir,
 			ContainerDir: containerDir,
@@ -204,6 +225,8 @@ func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourcea
 		return nil, nil, fmt.Errorf("create CDI spec for claim %s: %w", claim.UID, err)
 	}
 
+	d.updateClaimStatus(ctx, claim, allocResult, pd)
+
 	return pd, devices, nil
 }
 
@@ -221,6 +244,8 @@ func (d *DeviceState) UnprepareResourceClaim(ctx context.Context, pd *dratypes.P
 	if err := d.removeSocketDir(pd.Mount.HostDir); err != nil {
 		return err
 	}
+
+	d.clearClaimStatus(ctx, pd)
 
 	logger.Info("Cleaned up claim resources", "claimUID", pd.ClaimUID, "socketDir", pd.Mount.HostDir)
 	return nil
@@ -252,6 +277,86 @@ func (d *DeviceState) removeSocketDir(socketDir string) error {
 		return fmt.Errorf("remove socket directory %q: %w", socketDir, err)
 	}
 	return nil
+}
+
+// updateClaimStatus writes driver debug data into ResourceClaim.Status.Devices
+// after a successful prepare.
+func (d *DeviceState) updateClaimStatus(
+	ctx context.Context,
+	claim *resourceapi.ResourceClaim,
+	allocResult resourceapi.DeviceRequestAllocationResult,
+	pd *dratypes.PreparedDevice,
+) {
+	logger := klog.FromContext(ctx).WithName("updateClaimStatus")
+	if d.draClient == nil {
+		return
+	}
+	logger.Info("Updating claim status",
+		"claimUID", claim.UID,
+		"allocDriver", allocResult.Driver,
+		"allocPool", allocResult.Pool,
+		"allocDevice", allocResult.Device,
+	)
+
+	payload, err := json.Marshal(deviceStatusData{
+		Mount:       pd.Mount,
+		Socket:      pd.Socket,
+		BridgeName:  pd.BridgeName,
+		CDIDeviceID: pd.CDIDeviceID,
+	})
+	if err != nil {
+		logger.Error(err, "Failed to marshal claim status data", "claimUID", claim.UID)
+		return
+	}
+
+	updated := claim.DeepCopy()
+	updated.Status.Devices = []resourceapi.AllocatedDeviceStatus{
+		{
+			Driver:  allocResult.Driver,
+			Pool:    allocResult.Pool,
+			Device:  allocResult.Device,
+			ShareID: (*string)(allocResult.ShareID),
+			Data:    &runtime.RawExtension{Raw: payload},
+		},
+	}
+
+	if _, err := d.draClient.ResourceClaims(claim.Namespace).UpdateStatus(
+		ctx, updated, metav1.UpdateOptions{},
+	); err != nil {
+		logger.Error(err, "Failed to update claim status", "claimUID", claim.UID)
+	} else {
+		logger.V(1).Info("Updated claim status", "claimUID", claim.UID)
+	}
+}
+
+// clearClaimStatus removes the driver's entry from ResourceClaim.Status.Devices
+// after unprepare.
+func (d *DeviceState) clearClaimStatus(ctx context.Context, pd *dratypes.PreparedDevice) {
+	logger := klog.FromContext(ctx).WithName("clearClaimStatus")
+	if d.draClient == nil {
+		return
+	}
+
+	claim, err := d.draClient.ResourceClaims(pd.ClaimNamespace).Get(
+		ctx, pd.ClaimName, metav1.GetOptions{},
+	)
+	if err != nil {
+		// The claim may already be gone; log at V(1) and return.
+		logger.V(1).Info("Could not fetch claim for status clear (may be deleted)",
+			"claimUID", pd.ClaimUID, "err", err)
+		return
+	}
+
+	updated := claim.DeepCopy()
+	updated.Status.Devices = nil
+
+	if _, err := d.draClient.ResourceClaims(claim.Namespace).UpdateStatus(
+		ctx, updated, metav1.UpdateOptions{},
+	); err != nil {
+		logger.Error(err, "Failed to clear claim status", "claimUID", pd.ClaimUID)
+	} else {
+		logger.V(1).Info("Cleared claim status", "claimUID", pd.ClaimUID)
+	}
 }
 
 // computeAllocatableDevices converts a list of bridge specs into DRA device specifications.

@@ -66,11 +66,12 @@ type SocketInfo struct {
 
 // PreparedDevice is the unit of prepared state for a single ResourceClaim.
 type PreparedDevice struct {
-	ClaimUID    k8stypes.UID           `json:"claimUID"`
-	ClaimName   string                 `json:"claimName"`
-	BridgeName  string                 `json:"bridgeName"`
-	Mount       MountInfo              `json:"mount"`
-	Socket      SocketInfo             `json:"socket"`
-	CDIDeviceID string                 `json:"cdiDeviceID"`
-	Devices     []kubeletplugin.Device `json:"-"`
+	ClaimUID       k8stypes.UID           `json:"claimUID"`
+	ClaimNamespace string                 `json:"claimNamespace"`
+	ClaimName      string                 `json:"claimName"`
+	BridgeName     string                 `json:"bridgeName"`
+	Mount          MountInfo              `json:"mount"`
+	Socket         SocketInfo             `json:"socket"`
+	CDIDeviceID    string                 `json:"cdiDeviceID"`
+	Devices        []kubeletplugin.Device `json:"-"`
 }
