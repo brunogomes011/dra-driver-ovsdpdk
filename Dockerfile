@@ -29,7 +29,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 
 FROM quay.io/centos/centos:stream9 AS runtime
 
-RUN dnf install -y acl && dnf clean all
+RUN dnf install -y util-linux-core acl && dnf clean all
 
 COPY --from=builder /dra-driver-ovsdpdk /usr/bin/dra-driver-ovsdpdk
 
