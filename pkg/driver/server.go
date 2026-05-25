@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	resourceapi "k8s.io/api/resource/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
@@ -53,10 +54,20 @@ func (d *Driver) PrepareResourceClaims(ctx context.Context, claims []*resourceap
 		result[claim.UID] = kubeletplugin.PrepareResult{
 			Devices: []kubeletplugin.Device{pd.Device},
 		}
+		d.updateClaimStatus(ctx, claim)
 		logger.V(1).Info("Prepared claim", "claim", claim.UID, "name", claim.Name, "namespace", claim.Namespace, "result", pd)
 	}
 
 	return result, nil
+}
+
+func (d *Driver) updateClaimStatus(ctx context.Context, claim *resourceapi.ResourceClaim) {
+
+	if _, err := d.client.ResourceV1().ResourceClaims(claim.Namespace).UpdateStatus(ctx, claim, metav1.UpdateOptions{}); err != nil {
+		d.log.Error(err, "Failed to update claim status", "claimUID", claim.UID)
+	} else {
+		d.log.V(1).Info("Updated claim status", "claimUID", claim.UID)
+	}
 }
 
 func (d *Driver) UnprepareResourceClaims(ctx context.Context, claims []kubeletplugin.NamespacedObject) (map[k8stypes.UID]error, error) {

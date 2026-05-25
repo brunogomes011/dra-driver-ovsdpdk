@@ -20,6 +20,7 @@ package devicestate
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/runtime"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
@@ -53,6 +55,15 @@ type DeviceState struct {
 	vhostUserConfig   *ovsdpdkdrav1alpha1.VhostUserSpec
 	cdi               *dracdi.Handler
 	socketFS          socketfs.SocketFS
+}
+
+// deviceStatusData is the driver-specific debug payload written into
+// ResourceClaim.Status.Devices[].Data after a successful prepare.
+type deviceStatusData struct {
+	Mount        dratypes.MountInfo  `json:"mount"`
+	Socket       dratypes.SocketInfo `json:"socket"`
+	BridgeName   string              `json:"bridgeName"`
+	CDIDeviceIDs []string            `json:"cdiDeviceID"`
 }
 
 // New creates a new DeviceState with the given CDI handler.
@@ -225,6 +236,8 @@ func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourcea
 		return nil, fmt.Errorf("create CDI spec for claim %s: %w", claim.UID, err)
 	}
 
+	updateClaimStatus(ctx, claim, allocResult, pd)
+
 	return pd, nil
 }
 
@@ -255,6 +268,36 @@ func getContainerDir(root string, claim *resourceapi.ResourceClaim) string {
 // getSocketDir returns the socket directory for a given claim and request
 func getSocketDir(podUID k8stypes.UID, claim *resourceapi.ResourceClaim) string {
 	return filepath.Join(consts.HostRootPath, string(podUID)+"_"+getPodClaimName(claim))
+}
+
+// updateClaimStatus writes driver debug data into ResourceClaim.Status.Devices
+// after a successful prepare.
+func updateClaimStatus(
+	ctx context.Context,
+	claim *resourceapi.ResourceClaim,
+	allocResult resourceapi.DeviceRequestAllocationResult,
+	pd *dratypes.PreparedDevice,
+) {
+	logger := klog.FromContext(ctx).WithName("updateClaimStatus")
+
+	payload, err := json.Marshal(deviceStatusData{
+		Mount:        pd.Mount,
+		Socket:       pd.Socket,
+		BridgeName:   pd.BridgeName,
+		CDIDeviceIDs: pd.Device.CDIDeviceIDs,
+	})
+	if err != nil {
+		logger.Error(err, "Failed to marshal claim status data", "claimUID", claim.UID)
+		return
+	}
+
+	claim.Status.Devices = append(claim.Status.Devices, resourceapi.AllocatedDeviceStatus{
+		Driver:  allocResult.Driver,
+		Pool:    allocResult.Pool,
+		Device:  allocResult.Device,
+		ShareID: (*string)(allocResult.ShareID),
+		Data:    &runtime.RawExtension{Raw: payload},
+	})
 }
 
 // computeAllocatableDevices converts a list of bridge specs into DRA device specifications.
