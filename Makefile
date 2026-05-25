@@ -15,7 +15,7 @@
 DRIVER_NAME := dra-driver-ovsdpdk
 MODULE      := github.com/amorenoz/dra-driver-ovsdpdk
 
-GOLANG_VERSION        ?= 1.24
+GOLANG_VERSION        ?= 1.26
 GOLANGCI_LINT_VERSION ?= v2.7.2
 CONTROLLER_GEN_VERSION ?= v0.21.0
 MOCKERY_VERSION        ?= v2.53.6
