@@ -31,7 +31,7 @@ BIN_DIR := $(CURDIR)/bin
 
 APIS := ovsdpdkdra/v1alpha1
 
-.PHONY: all build binary check vet lint test coverage vendor generate generate-deepcopy generate-crds build-image push-image
+.PHONY: all build binary check vet lint test coverage vendor generate generate-deepcopy generate-crds build-image push-image deploy undeploy
 
 all: check test build
 
@@ -98,3 +98,17 @@ build-image:
 
 push-image: build-image
 	$(CONTAINER_TOOL) push $(IMAGE_NAME):$(IMAGE_TAG)
+
+# ---- cluster deployment ---------------------------------------------------
+
+deploy: ## Deploy the driver into the current kubectl context
+	kubectl apply -f $(CURDIR)/deployments/crds/
+	kubectl apply -f $(CURDIR)/deployments/namespace.yaml
+	kubectl apply -f $(CURDIR)/deployments/rbac.yaml
+	sed 's|IMAGE|$(IMAGE_NAME):$(IMAGE_TAG)|g' \
+		$(CURDIR)/deployments/daemonset.yaml | kubectl apply -f -
+
+undeploy: ## Remove the driver from the current kubectl context
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/rbac.yaml
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/namespace.yaml
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/crds/
