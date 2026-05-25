@@ -314,8 +314,13 @@ func bridgeToDevice(bridge ovsdpdkdrav1alpha1.BridgeSpec) resourceapi.Device {
 	return resourceapi.Device{
 		Name:                     bridge.Name,
 		AllowMultipleAllocations: ptr.To(true),
+		Attributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+			consts.DriverName + "/" + "bridgeName": {
+				StringValue: ptr.To(bridge.Name),
+			},
+		},
 		Capacity: map[resourceapi.QualifiedName]resourceapi.DeviceCapacity{
-			"ovsdpdk.k8snetworkplumbingwg.io/ports": {
+			consts.DriverName + "/" + "ports": {
 				Value: *resource.NewQuantity(consts.DefaultBridgeCapacity, resource.DecimalSI),
 				RequestPolicy: &resourceapi.CapacityRequestPolicy{
 					Default: one,
