@@ -23,6 +23,7 @@ import (
 
 	resourceapi "k8s.io/api/resource/v1"
 	coreclientset "k8s.io/client-go/kubernetes"
+	metadatav1alpha1 "k8s.io/dynamic-resource-allocation/api/metadata/v1alpha1"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/dynamic-resource-allocation/resourceslice"
 	"k8s.io/klog/v2"
@@ -42,24 +43,41 @@ type Driver struct {
 	client      coreclientset.Interface
 }
 
+// Config encapsulates the Driver configuration.
+type Config struct {
+	NodeName             string
+	EnableDeviceMetadata bool
+	PluginDataDir        string
+	CdiDir               string
+}
+
 // New creates a new Driver and registers it with kubelet.
-func New(ctx context.Context, devState devicestate.DeviceStateIface, kubeClient coreclientset.Interface, nodeName, pluginDataDir string) (*Driver, error) {
+func New(ctx context.Context, devState devicestate.DeviceStateIface, kubeClient coreclientset.Interface, config *Config) (*Driver, error) {
 	logger := klog.FromContext(ctx).WithName("driver")
 
 	d := &Driver{
 		log:         logger,
-		nodeName:    nodeName,
+		nodeName:    config.NodeName,
 		deviceState: devState,
 		podManager:  podmanager.New(),
 		client:      kubeClient,
 	}
 
-	helper, err := kubeletplugin.Start(ctx, d,
+	opts := []kubeletplugin.Option{
 		kubeletplugin.DriverName(consts.DriverName),
-		kubeletplugin.NodeName(nodeName),
+		kubeletplugin.NodeName(config.NodeName),
 		kubeletplugin.KubeClient(kubeClient),
-		kubeletplugin.PluginDataDirectoryPath(pluginDataDir),
-	)
+		kubeletplugin.PluginDataDirectoryPath(config.PluginDataDir),
+	}
+	if config.EnableDeviceMetadata {
+		opts = append(opts,
+			kubeletplugin.EnableDeviceMetadata(true),
+			kubeletplugin.MetadataVersions(metadatav1alpha1.SchemeGroupVersion),
+			kubeletplugin.CDIDirectory(config.CdiDir),
+		)
+	}
+
+	helper, err := kubeletplugin.Start(ctx, d, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("start kubelet plugin: %w", err)
 	}

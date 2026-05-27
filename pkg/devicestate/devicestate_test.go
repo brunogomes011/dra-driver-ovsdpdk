@@ -411,6 +411,26 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 			Expect(err).To(MatchError(ContainSubstring("remove socket directory")))
 		})
 	})
+
+	Describe("PrepareResourceClaim Device.Metadata", func() {
+		It("should always populate Device.Metadata with vhost-user-path", func(ctx SpecContext) {
+			ds, mockFS, _ := newDeviceStateWithMockFS(ctx, nil)
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+			claim := makeClaim("abcdef12-0000-0000-0000-000000000030", "pod-uid-meta", "claim-meta", "vhost-meta", "br-dpdk0")
+			pd, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			meta := pd.Device.Metadata
+			Expect(meta).NotTo(BeNil())
+
+			socketAttr, ok := meta.Attributes["vhost-user-path"]
+			Expect(ok).To(BeTrue())
+			Expect(socketAttr.StringValue).NotTo(BeNil())
+			Expect(*socketAttr.StringValue).To(Equal(pd.Socket.ContainerPath))
+			Expect(*socketAttr.StringValue).To(HavePrefix(consts.DefaultContainerRootPath))
+		})
+	})
 })
 
 // newDeviceStateWithMockFS creates a DeviceState with a real CDI temp directory

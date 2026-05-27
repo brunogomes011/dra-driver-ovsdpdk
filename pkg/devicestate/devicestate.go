@@ -196,6 +196,7 @@ func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourcea
 
 	cdiDeviceID := dracdi.DeviceID(claim.UID, allocResult.Device)
 	containerDir := getContainerDir(vhostConfig.ContainerRootPath, claim)
+	containerPath := filepath.Join(containerDir, "vhost.sock")
 
 	pd := &dratypes.PreparedDevice{
 		Device: kubeletplugin.Device{
@@ -203,6 +204,11 @@ func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourcea
 			PoolName:     allocResult.Pool,
 			DeviceName:   allocResult.Device,
 			CDIDeviceIDs: []string{cdiDeviceID},
+			Metadata: &kubeletplugin.DeviceMetadata{
+				Attributes: map[string]resourceapi.DeviceAttribute{
+					"vhost-user-path": {StringValue: ptr.To(containerPath)},
+				},
+			},
 		},
 		ClaimNamespacedName: kubeletplugin.NamespacedObject{
 			NamespacedName: k8stypes.NamespacedName{
@@ -218,7 +224,7 @@ func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourcea
 		},
 		Socket: dratypes.SocketInfo{
 			HostPath:      filepath.Join(socketDir, "vhost.sock"),
-			ContainerPath: filepath.Join(containerDir, "vhost.sock"),
+			ContainerPath: containerPath,
 		},
 	}
 
