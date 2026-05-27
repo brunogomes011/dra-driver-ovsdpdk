@@ -93,6 +93,13 @@ func newApp() *cli.App {
 			Destination: &f.KubeletPluginsDirectoryPath,
 			EnvVars:     []string{"KUBELET_PLUGINS_DIRECTORY_PATH"},
 		},
+		&cli.BoolFlag{
+			Name:        "enable-device-metadata",
+			Usage:       "Enable DRA DownwardAPI device metadata (KEP-5304). When enabled, a JSON metadata file is bind-mounted into each container with device attributes such as the vhost-user socket path.",
+			Value:       false,
+			Destination: &f.EnableDeviceMetadata,
+			EnvVars:     []string{"ENABLE_DEVICE_METADATA"},
+		},
 	}
 	cliFlags = append(cliFlags, f.KubeClientConfig.Flags()...)
 	cliFlags = append(cliFlags, f.LoggingConfig.Flags()...)
@@ -178,7 +185,7 @@ func run(ctx context.Context, config *types.Config) error {
 	cdiHandler := cdi.New(config.Flags.CdiRoot)
 	devState := devicestate.New(cdiHandler)
 
-	dvr, err := driver.New(ctx, devState, config.K8sClient, config.Flags.NodeName, config.DriverPluginPath())
+	dvr, err := driver.New(ctx, devState, config.K8sClient, config.Flags.NodeName, config.DriverPluginPath(), config.Flags.CdiRoot, config.Flags.EnableDeviceMetadata)
 	if err != nil {
 		return fmt.Errorf("create DRA driver: %w", err)
 	}

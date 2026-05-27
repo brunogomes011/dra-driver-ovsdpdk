@@ -34,6 +34,7 @@ type Flags struct {
 	CdiRoot                       string
 	KubeletRegistrarDirectoryPath string
 	KubeletPluginsDirectoryPath   string
+	EnableDeviceMetadata          bool
 	LoggingConfig                 *flags.LoggingConfig
 	KubeClientConfig              flags.KubeClientConfig
 }

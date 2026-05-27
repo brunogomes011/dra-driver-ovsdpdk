@@ -20,7 +20,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
+	"syscall"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -30,10 +33,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
-
-	"os/user"
-	"strconv"
-	"syscall"
 
 	ovsdpdkdrav1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsdpdkdra/v1alpha1"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/cdi"
@@ -216,9 +215,17 @@ var _ = Describe("DeviceState", func() {
 // for both the CDI root and the vhost-user socket root. It registers a Ginkgo
 // DeferCleanup to remove both directories after the spec.
 func newDeviceStateWithDirs() (ds *devicestate.DeviceState, hostRoot string) {
+	ds, _, hostRoot = newDeviceStateWithAllDirs()
+	return ds, hostRoot
+}
+
+// newDeviceStateWithAllDirs is like newDeviceStateWithDirs but also returns the
+// CDI root directory, needed by tests that inspect metadata files.
+func newDeviceStateWithAllDirs() (ds *devicestate.DeviceState, cdiRoot, hostRoot string) {
 	GinkgoHelper()
 
-	cdiRoot, err := os.MkdirTemp("", "cdi-root-*")
+	var err error
+	cdiRoot, err = os.MkdirTemp("", "cdi-root-*")
 	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(os.RemoveAll, cdiRoot)
 
@@ -228,7 +235,7 @@ func newDeviceStateWithDirs() (ds *devicestate.DeviceState, hostRoot string) {
 
 	cdiHandler := cdi.New(cdiRoot)
 	ds = devicestate.New(cdiHandler)
-	return ds, hostRoot
+	return ds, cdiRoot, hostRoot
 }
 
 // makeClaim builds a minimal ResourceClaim that satisfies PrepareResourceClaim.
@@ -609,6 +616,30 @@ var _ = Describe("DeviceState permissions", func() {
 			_, err := ds.PrepareResourceClaim(ctx, claim)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("invalid SELinux label"))
+		})
+	})
+})
+
+var _ = Describe("DeviceState metadata", func() {
+	Describe("PrepareResourceClaim Device.Metadata", func() {
+		It("should always populate Device.Metadata with vhost-user-path", func(ctx SpecContext) {
+			ds, hostRoot := newDeviceStateWithDirs()
+			Expect(ds.UpdatePolicyDevices(ctx, nil, &ovsdpdkdrav1alpha1.VhostUserSpec{
+				HostRootPath:      hostRoot,
+				ContainerRootPath: "/container",
+			})).To(Succeed())
+
+			claim := makeClaim("abcdef12-0000-0000-0000-000000000030", "pod-uid-meta", "claim-meta", "vhost-meta", "br-dpdk0")
+			pd, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			meta := pd.Device.Metadata
+			Expect(meta).NotTo(BeNil())
+
+			socketAttr, ok := meta.Attributes["vhost-user-path"]
+			Expect(ok).To(BeTrue())
+			Expect(socketAttr.StringValue).NotTo(BeNil())
+			Expect(*socketAttr.StringValue).To(Equal(pd.Socket.ContainerPath))
 		})
 	})
 })

@@ -217,6 +217,21 @@ make check    # vet + lint
 make generate # regenerate CRD manifests and deepcopy
 ```
 
+## Device metadata (KEP-5304 DownwardAPI)
+
+When the driver is started with `--enable-device-metadata` (or `ENABLE_DEVICE_METADATA=true`), it uses the built-in support in `k8s.io/dynamic-resource-allocation` to write a versioned metadata JSON file for each prepared device and bind-mount it read-only into the container at the standard KEP-5304 path:
+
+```
+/var/run/kubernetes.io/dra-device-attributes/<pod-claim-name>/<request-name>/metadata.json
+```
+
+The file is a JSON stream in the `metadata.resource.k8s.io/v1alpha1` format. It contains two device attributes:
+
+| Attribute key | Value |
+|---|---|
+| `vhost-user-path` | Container-side path of the vhost-user socket |
+
+
 ### TODO List
 This is very early stage of development. Planned features are:
 - [ ] OVS support including: bridge monitorind, port creation / deletion and uplink detection
@@ -225,5 +240,5 @@ This is very early stage of development. Planned features are:
 - [ ] DevicePlugin server to expose topology of detected uplink interfaces
 - [ ] Networking features: VLAN, QoS, custom MTU
 - [ ] Persistency across driver reboots
-- [ ] DRA Downward API
+- [x] DRA Downward API (KEP-5304) — implemented via `--enable-device-metadata`
 
