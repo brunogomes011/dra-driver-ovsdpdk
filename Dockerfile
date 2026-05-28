@@ -27,10 +27,23 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     -o /dra-driver-ovsdpdk \
     ./cmd/dra-driver-ovsdpdk/
 
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-s -w" \
+    -o /webhook \
+    ./cmd/webhook/
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-s -w" \
+    -o /ovsdpdk-cni \
+    ./cmd/cni/
+
 FROM quay.io/centos/centos:stream9 AS runtime
 
 RUN dnf install -y util-linux-core acl && dnf clean all
 
 COPY --from=builder /dra-driver-ovsdpdk /usr/bin/dra-driver-ovsdpdk
+COPY --from=builder /webhook /usr/bin/webhook
+RUN mkdir -p /cni/
+COPY --from=builder /ovsdpdk-cni /cni/ovsdpdk
 
 ENTRYPOINT ["/usr/bin/dra-driver-ovsdpdk"]

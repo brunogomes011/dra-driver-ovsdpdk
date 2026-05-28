@@ -24,6 +24,18 @@ spec:
       serviceAccountName: dra-driver-ovsdpdk
       hostPID: true
       initContainers:
+        - name: install-cni
+          image: IMAGE
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - |
+              cp -f /cni/ovsdpdk /opt/cni/bin/ovsdpdk
+              chmod 755 /opt/cni/bin/ovsdpdk
+          volumeMounts:
+            - name: cni-bin
+              mountPath: /opt/cni/bin
         - name: init-users
           image: IMAGE
           command:
@@ -95,4 +107,8 @@ spec:
         - name: socket-root
           hostPath:
             path: /var/run/ovsdpdk
+            type: DirectoryOrCreate
+        - name: cni-bin
+          hostPath:
+            path: /opt/cni/bin
             type: DirectoryOrCreate

@@ -3,6 +3,7 @@ module github.com/amorenoz/dra-driver-ovsdpdk
 go 1.26.0
 
 require (
+	github.com/k8snetworkplumbingwg/network-attachment-definition-client v1.7.7
 	github.com/onsi/ginkgo/v2 v2.29.0
 	github.com/onsi/gomega v1.41.0
 	github.com/spf13/pflag v1.0.10

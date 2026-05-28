@@ -232,11 +232,61 @@ The file is a JSON stream in the `metadata.resource.k8s.io/v1alpha1` format. It 
 | `vhost-user-path` | Container-side path of the vhost-user socket |
 
 
+## Multus-mode mutating webhook
+For workloads that cannot currently request DRA resources (e.g: Kubevirt VMs), a mutating webhook and a dummy CNI binary are available.
+
+The cni binary is called `ovsdpdk` and is pretty much a no-op. It just implements the CNI spec to keep Multus happy.
+The webhook works similar to the [network-resource-injector webhook](https://github.com/k8snetworkplumbingwg/network-resources-injector). 
+
+If it finds a Pod that is requesting a network of type `ovsdpdk` and the `NetworkAttachmentDefinition` contains the special annotation `ovsdpdk.io/resourceClaimTemplate` pointing to a valid `ResourceClaimTemplate`, it injects a claim to all containers
+in the pod requesting a resource provided by that `ResourceClaimTemplate`. The pod-claim-name will be the same as the network interface name or auto-generated.
+
+For example, given a `NetworkAttachmentDefinition` such as:
+```yaml
+apiVersion: "k8s.cni.cncf.io/v1"
+kind: NetworkAttachmentDefinition
+metadata:
+  name: ovs-net-dra
+  annotations:
+    ovsdpdk.io/resourceClaimTemplate: ovsdpdk
+spec:
+  config: '{
+      "type": "ovsdpdk"
+    }'
+```
+
+A pod containing:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  k8s.v1.cni.cncf.io/networks: '[{"name":"ovs-net-dra", "interface":"my-vhost-iface"}]'
+# [...]
+```
+
+Will be mutated to have:
+
+```yaml
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: foo
+    resources:
+      claims:
+      - name: my-vhost-iface
+  # [...]
+  resourceClaims:
+  - name: my-vhost-iface
+    resourceClaimTemplateName: ovsdpdk
+    resources:
+```
+
 ### TODO List
 This is very early stage of development. Planned features are:
 - [ ] OVS support including: bridge monitorind, port creation / deletion and uplink detection
-- [ ] CNI server and shim binary to forward calls form Multus to the DRA driver in order to populate the DeviceInfo spec.
-- [ ] Claim-injection webhook from a NetworkAttachmentDefinition for easy integration with Multus-based setups.
+- [x] Claim-injection webhook from a NetworkAttachmentDefinition for easy integration with Multus-based setups.
 - [ ] DevicePlugin server to expose topology of detected uplink interfaces
 - [ ] Networking features: VLAN, QoS, custom MTU
 - [ ] Persistency across driver reboots
