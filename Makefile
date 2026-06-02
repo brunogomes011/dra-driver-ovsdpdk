@@ -31,7 +31,7 @@ BIN_DIR := $(CURDIR)/bin
 
 APIS := ovsdpdkdra/v1alpha1
 
-.PHONY: all build binary check vet lint test coverage vendor generate generate-deepcopy generate-crds build-image push-image deploy undeploy
+.PHONY: all build binary build-webhook build-cni check vet lint test coverage vendor generate generate-deepcopy generate-crds build-image push-image deploy undeploy deploy-webhook undeploy-webhook deploy-openshift undeploy-openshift deploy-webhook-openshift undeploy-webhook-openshift
 
 all: check test build
 
@@ -43,6 +43,18 @@ binary:
 		go build -ldflags "-s -w" \
 		-o $(DRIVER_NAME) \
 		$(MODULE)/cmd/$(DRIVER_NAME)
+
+build-webhook:
+	GOOS=$(GOOS) GOARCH=$(GOARCH) \
+		go build -ldflags "-s -w" \
+		-o webhook \
+		$(MODULE)/cmd/webhook
+
+build-cni:
+	GOOS=$(GOOS) GOARCH=$(GOARCH) \
+		go build -ldflags "-s -w" \
+		-o ovsdpdk-cni \
+		$(MODULE)/cmd/ovsdpdk-cni
 
 check: vet lint
 
@@ -101,14 +113,61 @@ push-image: build-image
 
 # ---- cluster deployment ---------------------------------------------------
 
-deploy: ## Deploy the driver into the current kubectl context
+deploy: ## Deploy the driver (vanilla Kubernetes / kind)
 	kubectl apply -f $(CURDIR)/deployments/crds/
-	kubectl apply -f $(CURDIR)/deployments/namespace.yaml
-	kubectl apply -f $(CURDIR)/deployments/rbac.yaml
+	kubectl apply -f $(CURDIR)/deployments/k8s/namespace.yaml
+	kubectl apply -f $(CURDIR)/deployments/k8s/rbac.yaml
 	sed 's|IMAGE|$(IMAGE_NAME):$(IMAGE_TAG)|g' \
-		$(CURDIR)/deployments/daemonset.yaml | kubectl apply -f -
+		$(CURDIR)/deployments/k8s/daemonset.yaml | kubectl apply -f -
 
-undeploy: ## Remove the driver from the current kubectl context
-	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/rbac.yaml
-	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/namespace.yaml
+undeploy: ## Remove the driver (vanilla Kubernetes / kind)
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/k8s/rbac.yaml
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/k8s/namespace.yaml
 	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/crds/
+
+deploy-webhook: ## Deploy the webhook (vanilla Kubernetes / kind — generates self-signed TLS cert)
+	kubectl apply -f $(CURDIR)/deployments/k8s/webhook/rbac.yaml
+	kubectl apply -f $(CURDIR)/deployments/k8s/webhook/service.yaml
+	kubectl apply -f $(CURDIR)/deployments/k8s/webhook/admission.yaml
+	$(CURDIR)/hack/gen-webhook-certs.sh
+	sed 's|IMAGE|$(IMAGE_NAME):$(IMAGE_TAG)|g' \
+		$(CURDIR)/deployments/k8s/webhook/deployment.yaml | kubectl apply -f -
+	kubectl rollout status deployment/ovsdpdk-webhook -n dra-driver-ovsdpdk
+
+undeploy-webhook: ## Remove the webhook (vanilla Kubernetes / kind)
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/k8s/webhook/admission.yaml
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/k8s/webhook/deployment.yaml
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/k8s/webhook/service.yaml
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/k8s/webhook/rbac.yaml
+
+deploy-openshift: ## Deploy the driver on OpenShift
+	kubectl apply -f $(CURDIR)/deployments/crds/
+	kubectl apply -f $(CURDIR)/deployments/openshift/namespace.yaml
+	kubectl apply -f $(CURDIR)/deployments/openshift/scc.yaml
+	kubectl apply -f $(CURDIR)/deployments/openshift/rbac.yaml
+	sed 's|IMAGE|$(IMAGE_NAME):$(IMAGE_TAG)|g' \
+		$(CURDIR)/deployments/openshift/daemonset.yaml | kubectl apply -f -
+
+undeploy-openshift: ## Remove the driver from OpenShift
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/openshift/rbac.yaml
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/openshift/scc.yaml
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/openshift/namespace.yaml
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/crds/
+
+deploy-webhook-openshift: ## Deploy the webhook on OpenShift (uses service-serving-cert-signer)
+	kubectl apply -f $(CURDIR)/deployments/openshift/webhook/rbac.yaml
+	kubectl apply -f $(CURDIR)/deployments/openshift/webhook/service.yaml
+	@echo "Waiting for OpenShift to provision ovsdpdk-webhook-certs secret..."
+	@until kubectl get secret ovsdpdk-webhook-certs -n dra-driver-ovsdpdk >/dev/null 2>&1; do \
+		sleep 5; \
+	done
+	@echo "Secret ready."
+	sed 's|IMAGE|$(IMAGE_NAME):$(IMAGE_TAG)|g' \
+		$(CURDIR)/deployments/openshift/webhook/deployment.yaml | kubectl apply -f -
+	kubectl apply -f $(CURDIR)/deployments/openshift/webhook/admission.yaml
+
+undeploy-webhook-openshift: ## Remove the webhook from OpenShift
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/openshift/webhook/admission.yaml
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/openshift/webhook/deployment.yaml
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/openshift/webhook/service.yaml
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/openshift/webhook/rbac.yaml

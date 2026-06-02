@@ -1,0 +1,27 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: ovsdpdk-webhook
+webhooks:
+  - name: pods.ovsdpdk.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    timeoutSeconds: 10
+    reinvocationPolicy: Never
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: ["dra-driver-ovsdpdk", "kube-system"]
+    clientConfig:
+      service:
+        name: ovsdpdk-webhook
+        namespace: dra-driver-ovsdpdk
+        path: /mutate
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+        scope: "*"

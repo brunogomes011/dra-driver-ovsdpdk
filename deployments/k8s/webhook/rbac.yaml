@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ovsdpdk-webhook
+  namespace: dra-driver-ovsdpdk
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ovsdpdk-webhook
+rules:
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["network-attachment-definitions"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ovsdpdk-webhook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ovsdpdk-webhook
+subjects:
+  - kind: ServiceAccount
+    name: ovsdpdk-webhook
+    namespace: dra-driver-ovsdpdk

@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ovsdpdk-webhook
+  namespace: dra-driver-ovsdpdk
+spec:
+  selector:
+    app: ovsdpdk-webhook
+  ports:
+    - name: webhook
+      port: 443
+      targetPort: 9443

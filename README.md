@@ -69,7 +69,7 @@ spec:
 If you want to quickly experiment with the driver, you can create a kind cluster with:
 
 ```bash
-kind create cluster --config deployments/kind-config.yaml
+kind create cluster --config deployments/k8s/kind-config.yaml
 ```
 
 ### Build and push
@@ -89,9 +89,9 @@ make deploy
 
 # Or step by step:
 kubectl apply -f deployments/crds/
-kubectl apply -f deployments/namespace.yaml
-kubectl apply -f deployments/rbac.yaml
-sed "s|IMAGE|${IMAGE_NAME}:${IMAGE_TAG}|g" deployments/daemonset.yaml | kubectl apply -f -
+kubectl apply -f deployments/k8s/namespace.yaml
+kubectl apply -f deployments/k8s/rbac.yaml
+sed "s|IMAGE|${IMAGE_NAME}:${IMAGE_TAG}|g" deployments/k8s/daemonset.yaml | kubectl apply -f -
 ```
 
 Wait for rollout:
@@ -103,10 +103,10 @@ kubectl logs -n dra-driver-ovsdpdk -l app=dra-driver-ovsdpdk --prefix
 
 ### Configure policies and label nodes
 
-Edit `deployments/example-policy.yaml` to match your bridges and ownership requirements, then:
+Edit `deployments/k8s/example-policy.yaml` to match your bridges and ownership requirements, then:
 
 ```bash
-kubectl apply -f deployments/example-policy.yaml
+kubectl apply -f deployments/k8s/example-policy.yaml
 kubectl label node <worker-node> ovsdpdk-node=worker
 ```
 
@@ -119,7 +119,7 @@ kubectl get resourceslices -o wide
 ### Create a DeviceClass
 
 ```bash
-kubectl apply -f deployments/example-deviceclass.yaml
+kubectl apply -f deployments/k8s/example-deviceclass.yaml
 ```
 
 ### Consume a device
@@ -204,8 +204,66 @@ kubectl get resourceclaim my-dpdk-pod-vhost-p6bzb \
 ```bash
 make undeploy
 # also remove any policies and the DeviceClass:
-kubectl delete -f deployments/example-policy.yaml
-kubectl delete -f deployments/example-deviceclass.yaml
+kubectl delete -f deployments/k8s/example-policy.yaml
+kubectl delete -f deployments/k8s/example-deviceclass.yaml
+```
+
+### Deploying the mutating webhook (optional)
+
+```bash
+make deploy-webhook
+```
+
+It generates a self-signed certificate, store it in the `ovsdpdk-webhook-certs`
+Secret, and patch the CA bundle into the webhook configuration.
+
+Requires `openssl` and `kubectl` on the host.
+
+To undeploy:
+
+```bash
+make undeploy-webhook
+```
+
+### Deploying on OpenShift
+
+OpenShift manifests live under `deployments/openshift/`. They include a custom
+`SecurityContextConstraints` for the driver and use OpenShift's
+service-serving-cert-signer for webhook TLS.
+
+#### Enable required feature gates
+
+The driver requires feature gates that may not be enabled by default. Make sure
+to edit the `FeatureGate` CR to enable them, e.g:
+
+```bash
+oc patch featuregate cluster --type merge -p '
+{
+  "spec": {
+    "featureSet": "CustomNoUpgrade",
+    "customNoUpgrade": {
+      "enabled": [
+        "DynamicResourceAllocation",
+        "DRAConsumableCapacity",
+        "DRAResourceClaimDeviceStatus"
+      ]
+    }
+  }
+}'
+```
+
+#### Deploy
+
+```bash
+make deploy-openshift
+make deploy-webhook-openshift
+```
+
+To remove:
+
+```bash
+make undeploy-webhook-openshift
+make undeploy-openshift
 ```
 
 ## Development

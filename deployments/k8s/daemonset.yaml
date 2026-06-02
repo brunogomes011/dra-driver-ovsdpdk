@@ -5,7 +5,7 @@
 #
 # Or substitute before applying:
 #   sed 's|IMAGE|quay.io/amorenoz/dra-driver-ovsdpdk:latest|g' \
-#     deployments/daemonset.yaml | kubectl apply -f -
+#     deployments/k8s/daemonset.yaml | kubectl apply -f -
 
 apiVersion: apps/v1
 kind: DaemonSet

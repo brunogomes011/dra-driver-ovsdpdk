@@ -1,0 +1,40 @@
+# Example OvsDpdkResourcePolicy.
+#
+# This policy advertises two OVS-DPDK bridges (br-dpdk0, br-dpdk1) on nodes
+# labelled ovsdpdk-node=worker.  Adjust the nodeSelector, bridge names,
+# user/group, and aclUsers to match your environment.
+#
+# Apply with:
+#   kubectl apply -f deployments/k8s/example-policy.yaml
+
+apiVersion: ovsdpdk.k8snetworkplumbingwg.io/v1alpha1
+kind: OvsDpdkResourcePolicy
+metadata:
+  name: example-policy
+  namespace: dra-driver-ovsdpdk
+spec:
+  # nodeSelector restricts which nodes this policy applies to.
+  # Remove the field entirely to apply to all nodes.
+  nodeSelector:
+    nodeSelectorTerms:
+      - matchExpressions:
+          - key: ovsdpdk-node
+            operator: In
+            values:
+              - worker
+  bridges:
+    - name: br-dpdk0
+    - name: br-dpdk1
+  vhostUser:
+    # hostRootPath is the root directory on the host where per-pod socket
+    # directories are created.
+    hostRootPath: /var/run/ovsdpdk
+    # containerRootPath is the path inside the consuming container where the
+    # socket directory is bind-mounted by CDI.
+    containerRootPath: /var/run/ovsdpdk/vhost-user
+    # user/group own the socket directory.  Use names or numeric IDs.
+    #user: openvswitch
+    #group: 107
+    ## aclUsers receive an additional ACL entry (setfacl) on the directory.
+    #aclUsers:
+    #  - openvswitch
