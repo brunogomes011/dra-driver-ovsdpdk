@@ -5,10 +5,6 @@
 # --config-name flag (default: "default").
 #
 # Adjust user, group, and aclUsers to match your environment.
-#
-# Apply with:
-#   kubectl apply -f deployments/example-config.yaml
-
 apiVersion: ovsdpdk.k8snetworkplumbingwg.io/v1alpha1
 kind: OvsDpdkConfig
 metadata:

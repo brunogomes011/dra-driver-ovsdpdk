@@ -1,0 +1,24 @@
+# Example OvsDpdkConfig for OpenShift.
+#
+# This cluster-scoped object defines global vhost-user socket settings for the
+# OVS-DPDK DRA driver.  The driver watches the object whose name matches the
+# --config-name flag (default: "default").
+#
+# Adjust user, group, selinuxLabel, and aclUsers to match your environment.
+apiVersion: ovsdpdk.k8snetworkplumbingwg.io/v1alpha1
+kind: OvsDpdkConfig
+metadata:
+  name: default
+spec:
+  vhostUser:
+    # containerRootPath is the path inside the consuming container where the
+    # socket directory is bind-mounted by CDI.
+    containerRootPath: /var/run/ovsdpdk/vhost-user
+    # selinuxLabel is the label that is applied to the socket directory.
+    selinuxLabel: "system_u:object_r:container_file_t:s0"
+    # user/group own the socket directory.  Use names or numeric IDs.
+    user: openvswitch
+    group: 107
+    # aclUsers receive an additional ACL entry (setfacl) on the directory.
+    aclUsers:
+      - openvswitch

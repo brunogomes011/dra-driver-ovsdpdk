@@ -1,12 +1,3 @@
-# Replace IMAGE with the actual driver image, e.g.:
-#   kubectl set image daemonset/dra-driver-ovsdpdk \
-#     driver=quay.io/amorenoz/dra-driver-ovsdpdk:latest \
-#     -n dra-driver-ovsdpdk
-#
-# Or substitute before applying:
-#   sed 's|IMAGE|quay.io/amorenoz/dra-driver-ovsdpdk:latest|g' \
-#     deployments/daemonset.yaml | kubectl apply -f -
-
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:

@@ -2,10 +2,6 @@
 #
 # This policy advertises two OVS-DPDK bridges (br-dpdk0, br-dpdk1) on worker
 # nodes.  Adjust the nodeSelector and bridge names to match your environment.
-#
-# Apply with:
-#   kubectl apply -f deployments/example-policy.yaml
-
 apiVersion: ovsdpdk.k8snetworkplumbingwg.io/v1alpha1
 kind: OvsDpdkResourcePolicy
 metadata:

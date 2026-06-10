@@ -95,7 +95,7 @@ make build-image
 podman push "${IMAGE_NAME}:${IMAGE_TAG}"
 ```
 
-### Deploy
+### Deploy on Kubernetes
 
 ```bash
 # CRD, namespace, RBAC, and DaemonSet in one shot:
@@ -103,9 +103,9 @@ make deploy
 
 # Or step by step:
 kubectl apply -f deployments/crds/
-kubectl apply -f deployments/namespace.yaml
-kubectl apply -f deployments/rbac.yaml
-sed "s|IMAGE|${IMAGE_NAME}:${IMAGE_TAG}|g" deployments/daemonset.yaml | kubectl apply -f -
+kubectl kustomize deployments/k8s/ | \
+    sed "s|IMAGE|${IMAGE_NAME}:${IMAGE_TAG}|g" | \
+    kubectl apply -f -
 ```
 
 Wait for rollout:
@@ -117,17 +117,14 @@ kubectl logs -n dra-driver-ovsdpdk -l app=dra-driver-ovsdpdk --prefix
 
 ### Configure the driver
 
-Apply the global config and a resource policy, then create a DeviceClass:
+Apply the global config and a resource policy.
 
 ```bash
 # Global vhost-user settings (edit to match your environment):
-kubectl apply -f deployments/example-config.yaml
+kubectl apply -f deployments/examples/k8s-config.yaml
 
 # Bridge policy (edit bridges and nodeSelector):
-kubectl apply -f deployments/example-policy.yaml
-
-# DeviceClass:
-kubectl apply -f deployments/example-deviceclass.yaml
+kubectl apply -f deployments/examples/policy.yaml
 ```
 
 Verify the driver published ResourceSlices:
@@ -216,10 +213,30 @@ kubectl get resourceclaim my-dpdk-pod-vhost-p6bzb \
 
 ```bash
 make undeploy
-# also remove config, policies, and the DeviceClass:
-kubectl delete -f deployments/example-config.yaml
-kubectl delete -f deployments/example-policy.yaml
-kubectl delete -f deployments/example-deviceclass.yaml
+# also remove config and policies:
+kubectl delete -f deployments/examples/k8s-config.yaml
+kubectl delete -f deployments/examples/policy.yaml
+```
+
+### Deploying on OpenShift
+
+```bash
+make deploy-openshift
+```
+
+Then apply the OpenShift-specific config and a bridge policy:
+
+```bash
+kubectl apply -f deployments/examples/openshift-config.yaml
+kubectl apply -f deployments/examples/policy.yaml
+```
+
+To remove:
+
+```bash
+make undeploy-openshift
+kubectl delete -f deployments/examples/openshift-config.yaml
+kubectl delete -f deployments/examples/policy.yaml
 ```
 
 ## Development

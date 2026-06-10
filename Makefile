@@ -32,7 +32,7 @@ BIN_DIR := $(CURDIR)/bin
 
 APIS := ovsdpdkdra/v1alpha1
 
-.PHONY: all build binary check vet lint test coverage vendor generate generate-deepcopy generate-crds generate-mocks build-image push-image deploy undeploy
+.PHONY: all build binary check vet lint test coverage vendor generate generate-deepcopy generate-crds generate-mocks build-image push-image deploy undeploy deploy-openshift undeploy-openshift
 
 all: check test build
 
@@ -111,14 +111,24 @@ push-image: build-image
 
 # ---- cluster deployment ---------------------------------------------------
 
-deploy: ## Deploy the driver into the current kubectl context
+deploy: ## Deploy the driver (vanilla Kubernetes / kind)
 	kubectl apply -f $(CURDIR)/deployments/crds/
-	kubectl apply -f $(CURDIR)/deployments/namespace.yaml
-	kubectl apply -f $(CURDIR)/deployments/rbac.yaml
-	sed 's|IMAGE|$(IMAGE_NAME):$(IMAGE_TAG)|g' \
-		$(CURDIR)/deployments/daemonset.yaml | kubectl apply -f -
+	kubectl kustomize $(CURDIR)/deployments/k8s/ | \
+		sed 's|IMAGE|$(IMAGE_NAME):$(IMAGE_TAG)|g' | \
+		kubectl apply -f -
 
-undeploy: ## Remove the driver from the current kubectl context
-	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/rbac.yaml
-	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/namespace.yaml
+undeploy: ## Remove the driver (vanilla Kubernetes / kind)
+	kubectl kustomize $(CURDIR)/deployments/k8s/ | \
+		kubectl delete --ignore-not-found -f -
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/crds/
+
+deploy-openshift: ## Deploy the driver on OpenShift
+	kubectl apply -f $(CURDIR)/deployments/crds/
+	kubectl kustomize $(CURDIR)/deployments/openshift/ | \
+		sed 's|IMAGE|$(IMAGE_NAME):$(IMAGE_TAG)|g' | \
+		kubectl apply -f -
+
+undeploy-openshift: ## Remove the driver from OpenShift
+	kubectl kustomize $(CURDIR)/deployments/openshift/ | \
+		kubectl delete --ignore-not-found -f -
 	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/crds/
