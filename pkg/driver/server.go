@@ -25,6 +25,8 @@ import (
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
+
+	dratypes "github.com/amorenoz/dra-driver-ovsdpdk/pkg/types"
 )
 
 func (d *Driver) PrepareResourceClaims(ctx context.Context, claims []*resourceapi.ResourceClaim) (map[k8stypes.UID]kubeletplugin.PrepareResult, error) {
@@ -35,28 +37,25 @@ func (d *Driver) PrepareResourceClaims(ctx context.Context, claims []*resourceap
 		logger.V(1).Info("Preparing claim", "claim", claim.UID, "name", claim.Name, "namespace", claim.Namespace)
 		logger.V(3).Info("Claim", "claim", claim)
 
-		if pd, found := d.podManager.Get(claim.UID); found {
+		if preparedDevices, found := d.podManager.Get(claim.UID); found {
 			logger.V(1).Info("Claim already prepared, returning cached result", "claim", claim.UID)
-			result[claim.UID] = kubeletplugin.PrepareResult{
-				Devices: []kubeletplugin.Device{pd.Device},
-			}
+			result[claim.UID] = preparedDevicesToResult(preparedDevices)
 			continue
 		}
 
-		pd, err := d.deviceState.PrepareResourceClaim(ctx, claim)
+		preparedDevices, err := d.deviceState.PrepareResourceClaim(ctx, claim)
 		if err != nil {
 			logger.Error(err, "Failed to prepare claim", "claim", claim.UID)
 			result[claim.UID] = kubeletplugin.PrepareResult{Err: err}
 			return result, err
 		}
 
-		d.podManager.Set(claim.UID, pd)
-		result[claim.UID] = kubeletplugin.PrepareResult{
-			Devices: []kubeletplugin.Device{pd.Device},
-		}
+		d.podManager.Set(claim.UID, preparedDevices)
+		result[claim.UID] = preparedDevicesToResult(preparedDevices)
 		d.updateClaimStatus(ctx, claim)
-		logger.V(1).Info("Prepared claim", "claim", claim.UID, "name", claim.Name, "namespace", claim.Namespace, "result", pd)
+		logger.V(1).Info("Prepared claim", "claim", claim.UID, "name", claim.Name, "namespace", claim.Namespace, "result", preparedDevices)
 	}
+	logger.V(1).Info("Prepared claims", "result", result)
 
 	return result, nil
 }
@@ -97,4 +96,14 @@ func (d *Driver) UnprepareResourceClaims(ctx context.Context, claims []kubeletpl
 	}
 
 	return result, nil
+}
+
+func preparedDevicesToResult(preparedDevices []*dratypes.PreparedDevice) kubeletplugin.PrepareResult {
+	devices := []kubeletplugin.Device{}
+	for _, pd := range preparedDevices {
+		devices = append(devices, pd.Device)
+	}
+	return kubeletplugin.PrepareResult{
+		Devices: devices,
+	}
 }

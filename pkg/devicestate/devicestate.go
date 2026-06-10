@@ -21,6 +21,7 @@ package devicestate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -66,7 +67,7 @@ type deviceStatusData struct {
 	CDIDeviceIDs []string            `json:"cdiDeviceID"`
 }
 
-// New creates a new DeviceState with the given CDI handler.
+// New creates a new DeviceState with the given CDI handler and SocketFS.
 func New(cdi *dracdi.Handler, socketFS socketfs.SocketFS) *DeviceState {
 	ds := &DeviceState{
 		log:         klog.Background().WithName("DeviceState"),
@@ -160,15 +161,11 @@ func (d *DeviceState) UpdatePolicyDevices(ctx context.Context, bridges []ovsdpdk
 	return nil
 }
 
-// PrepareResourceClaim prepares a single resource claim. It creates the
-// per-claim socket directory and writes the CDI spec.
-func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourceapi.ResourceClaim) (*dratypes.PreparedDevice, error) {
+// PrepareResourceClaim prepares all devices in a resource claim. It creates a
+// socket directory per device and writes the CDI spec.
+func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourceapi.ResourceClaim) ([]*dratypes.PreparedDevice, error) {
 	logger := klog.FromContext(ctx).WithName("PrepareResourceClaim")
-
-	vhostConfig := d.GetVhostUserConfig()
-	if vhostConfig == nil {
-		return nil, fmt.Errorf("missing VhostUser configuration")
-	}
+	preparedDevices := make([]*dratypes.PreparedDevice, 0)
 
 	if claim.Status.Allocation == nil {
 		return nil, fmt.Errorf("claim %s/%s has no allocation", claim.Namespace, claim.Name)
@@ -179,30 +176,61 @@ func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourcea
 	if len(claim.Status.ReservedFor) > 1 {
 		return nil, fmt.Errorf("multiple pods found for claim %s/%s not supported", claim.Namespace, claim.Name)
 	}
+
+	for _, result := range claim.Status.Allocation.Devices.Results {
+		if result.Driver != consts.DriverName {
+			continue
+		}
+
+		preparedDevice, err := d.prepareDevice(ctx, claim, &result)
+		if err != nil {
+			logger.Error(err, "error preparing device", "result", result)
+			return nil, d.rollback(ctx, fmt.Errorf("error preparing device: %v", err), preparedDevices)
+		}
+		updateClaimStatus(ctx, claim, result, preparedDevice)
+		preparedDevices = append(preparedDevices, preparedDevice)
+	}
+
+	if len(preparedDevices) == 0 {
+		return nil, fmt.Errorf("no allocation results for driver %s", consts.DriverName)
+	}
+
+	for _, pd := range preparedDevices {
+		if err := d.cdi.CreateClaimSpecFile(pd); err != nil {
+			logger.Error(err, "error creating CDI spec file")
+			return nil, d.rollback(ctx, fmt.Errorf("error creating CDI spec file: %v", err), preparedDevices)
+		}
+	}
+
+	return preparedDevices, nil
+}
+
+func (d *DeviceState) prepareDevice(ctx context.Context, claim *resourceapi.ResourceClaim, result *resourceapi.DeviceRequestAllocationResult) (*dratypes.PreparedDevice, error) {
+	logger := klog.FromContext(ctx).WithName("prepareDevice")
+
 	podUID := k8stypes.UID(claim.Status.ReservedFor[0].UID)
 
-	results := claim.Status.Allocation.Devices.Results
-	if len(results) != 1 {
-		return nil, fmt.Errorf("claim %s/%s: expected exactly 1 allocation result, got %d", claim.Namespace, claim.Name, len(results))
+	vhostConfig := d.GetVhostUserConfig()
+	if vhostConfig == nil {
+		return nil, fmt.Errorf("missing VhostUser configuration")
 	}
-	allocResult := results[0]
 
-	socketDir := getSocketDir(podUID, claim)
+	socketDir := getSocketDir(podUID, claim, result)
 	if err := d.socketFS.CreateSocketDir(ctx, socketDir, d.GetVhostUserConfig()); err != nil {
 		return nil, fmt.Errorf("create socket directory %q: %w", socketDir, err)
 	}
 
 	// TODO: Create OVS port
 
-	cdiDeviceID := dracdi.DeviceID(claim.UID, allocResult.Device)
-	containerDir := getContainerDir(vhostConfig.ContainerRootPath, claim)
-	containerPath := filepath.Join(containerDir, "vhost.sock")
+	cdiDeviceID := dracdi.DeviceID(claim.UID, result.Device)
+	containerDir := getContainerDir(vhostConfig.ContainerRootPath, claim, result.Request)
+	containerPath := filepath.Join(containerDir, consts.VhostSocketFilename)
 
 	pd := &dratypes.PreparedDevice{
 		Device: kubeletplugin.Device{
-			Requests:     []string{allocResult.Request},
-			PoolName:     allocResult.Pool,
-			DeviceName:   allocResult.Device,
+			Requests:     []string{result.Request},
+			PoolName:     result.Pool,
+			DeviceName:   result.Device,
 			CDIDeviceIDs: []string{cdiDeviceID},
 			Metadata: &kubeletplugin.DeviceMetadata{
 				Attributes: map[string]resourceapi.DeviceAttribute{
@@ -217,39 +245,51 @@ func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourcea
 			},
 			UID: claim.UID,
 		},
-		BridgeName: allocResult.Device,
+		BridgeName: result.Device,
 		Mount: dratypes.MountInfo{
 			HostDir:      socketDir,
 			ContainerDir: containerDir,
 		},
 		Socket: dratypes.SocketInfo{
-			HostPath:      filepath.Join(socketDir, "vhost.sock"),
+			HostPath:      filepath.Join(socketDir, consts.VhostSocketFilename),
 			ContainerPath: containerPath,
 		},
 	}
 
-	logger.Info("Prepared vhost-user socket",
-		"podUID", podUID,
-		"claimName", claim.Name,
-		"bridgeName", pd.BridgeName,
-		"mount", pd.Mount,
-		"socket", pd.Socket,
-	)
-
-	if err := d.cdi.CreateClaimSpecFile(pd); err != nil {
-		_ = d.socketFS.RemoveSocketDir(pd.Mount.HostDir)
-		// TODO: delete OVS port
-		return nil, fmt.Errorf("create CDI spec for claim %s: %w", claim.UID, err)
-	}
-
-	updateClaimStatus(ctx, claim, allocResult, pd)
-
+	logger.Info("Prepared successful", "device", pd)
 	return pd, nil
 }
 
-// UnprepareResourceClaim removes the CDI spec and socket directory for a claim.
-func (d *DeviceState) UnprepareResourceClaim(ctx context.Context, pd *dratypes.PreparedDevice) error {
-	logger := klog.FromContext(ctx).WithName("UnprepareResourceClaim")
+func (d *DeviceState) rollback(ctx context.Context, err error, devices []*dratypes.PreparedDevice) error {
+	rollbackErrs := []error{err}
+
+	for _, device := range devices {
+		if rollbackErr := d.unprepareDevice(ctx, device); rollbackErr != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("rollback unprepare failed: %w", rollbackErr))
+		}
+	}
+
+	return errors.Join(rollbackErrs...)
+}
+
+// UnprepareResourceClaim removes the CDI spec and socket directory for each prepared device.
+func (d *DeviceState) UnprepareResourceClaim(ctx context.Context, preparedDevices []*dratypes.PreparedDevice) error {
+	var errs []error
+
+	for _, pd := range preparedDevices {
+		if err := d.unprepareDevice(ctx, pd); err != nil {
+			errs = append(errs, fmt.Errorf("unprepare failed: %w", err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+func (d *DeviceState) unprepareDevice(ctx context.Context, pd *dratypes.PreparedDevice) error {
+	logger := klog.FromContext(ctx).WithName("unprepareDevice")
 	claimUID := pd.ClaimNamespacedName.UID
 
 	if err := d.cdi.DeleteClaimSpecFile(claimUID); err != nil {
@@ -266,14 +306,14 @@ func (d *DeviceState) UnprepareResourceClaim(ctx context.Context, pd *dratypes.P
 	return nil
 }
 
-// getContainerDir returns the container-side mount point where the the socket directory will be mounted
-func getContainerDir(root string, claim *resourceapi.ResourceClaim) string {
-	return filepath.Join(root, getPodClaimName(claim))
+// getContainerDir returns the container-side mount point for a given claim and request.
+func getContainerDir(root string, claim *resourceapi.ResourceClaim, requestName string) string {
+	return filepath.Join(root, getPodClaimName(claim), requestName)
 }
 
-// getSocketDir returns the socket directory for a given claim and request
-func getSocketDir(podUID k8stypes.UID, claim *resourceapi.ResourceClaim) string {
-	return filepath.Join(consts.HostRootPath, string(podUID)+"_"+getPodClaimName(claim))
+// getSocketDir returns the socket directory for a given claim and request.
+func getSocketDir(podUID k8stypes.UID, claim *resourceapi.ResourceClaim, result *resourceapi.DeviceRequestAllocationResult) string {
+	return filepath.Join(consts.HostRootPath, string(podUID)+"_"+getPodClaimName(claim)+"_"+result.Request)
 }
 
 // updateClaimStatus writes driver debug data into ResourceClaim.Status.Devices
@@ -340,7 +380,7 @@ func bridgeToDevice(bridge ovsdpdkdrav1alpha1.BridgeSpec) resourceapi.Device {
 	}
 }
 
-// getPodClaimName the stable name of a claim in a Pod.
+// getPodClaimName returns the stable name of a claim in a Pod.
 // For claims created from a ResourceClaimTemplate the kubelet sets the
 // pod-local claim name in a standard annotation. For hand-written claims
 // the annotation is absent and claim.Name is already stable.

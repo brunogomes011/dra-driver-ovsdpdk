@@ -74,23 +74,23 @@ func (_c *MockDeviceStateIface_GetAllocatableDevices_Call) RunAndReturn(run func
 }
 
 // PrepareResourceClaim provides a mock function with given fields: ctx, claim
-func (_m *MockDeviceStateIface) PrepareResourceClaim(ctx context.Context, claim *v1.ResourceClaim) (*types.PreparedDevice, error) {
+func (_m *MockDeviceStateIface) PrepareResourceClaim(ctx context.Context, claim *v1.ResourceClaim) ([]*types.PreparedDevice, error) {
 	ret := _m.Called(ctx, claim)
 
 	if len(ret) == 0 {
 		panic("no return value specified for PrepareResourceClaim")
 	}
 
-	var r0 *types.PreparedDevice
+	var r0 []*types.PreparedDevice
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, *v1.ResourceClaim) (*types.PreparedDevice, error)); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, *v1.ResourceClaim) ([]*types.PreparedDevice, error)); ok {
 		return rf(ctx, claim)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, *v1.ResourceClaim) *types.PreparedDevice); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, *v1.ResourceClaim) []*types.PreparedDevice); ok {
 		r0 = rf(ctx, claim)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*types.PreparedDevice)
+			r0 = ret.Get(0).([]*types.PreparedDevice)
 		}
 	}
 
@@ -122,12 +122,12 @@ func (_c *MockDeviceStateIface_PrepareResourceClaim_Call) Run(run func(ctx conte
 	return _c
 }
 
-func (_c *MockDeviceStateIface_PrepareResourceClaim_Call) Return(_a0 *types.PreparedDevice, _a1 error) *MockDeviceStateIface_PrepareResourceClaim_Call {
+func (_c *MockDeviceStateIface_PrepareResourceClaim_Call) Return(_a0 []*types.PreparedDevice, _a1 error) *MockDeviceStateIface_PrepareResourceClaim_Call {
 	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *MockDeviceStateIface_PrepareResourceClaim_Call) RunAndReturn(run func(context.Context, *v1.ResourceClaim) (*types.PreparedDevice, error)) *MockDeviceStateIface_PrepareResourceClaim_Call {
+func (_c *MockDeviceStateIface_PrepareResourceClaim_Call) RunAndReturn(run func(context.Context, *v1.ResourceClaim) ([]*types.PreparedDevice, error)) *MockDeviceStateIface_PrepareResourceClaim_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -165,17 +165,17 @@ func (_c *MockDeviceStateIface_SetRepublishCallback_Call) RunAndReturn(run func(
 	return _c
 }
 
-// UnprepareResourceClaim provides a mock function with given fields: ctx, preparedDevice
-func (_m *MockDeviceStateIface) UnprepareResourceClaim(ctx context.Context, preparedDevice *types.PreparedDevice) error {
-	ret := _m.Called(ctx, preparedDevice)
+// UnprepareResourceClaim provides a mock function with given fields: ctx, preparedDevices
+func (_m *MockDeviceStateIface) UnprepareResourceClaim(ctx context.Context, preparedDevices []*types.PreparedDevice) error {
+	ret := _m.Called(ctx, preparedDevices)
 
 	if len(ret) == 0 {
 		panic("no return value specified for UnprepareResourceClaim")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *types.PreparedDevice) error); ok {
-		r0 = rf(ctx, preparedDevice)
+	if rf, ok := ret.Get(0).(func(context.Context, []*types.PreparedDevice) error); ok {
+		r0 = rf(ctx, preparedDevices)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -190,14 +190,14 @@ type MockDeviceStateIface_UnprepareResourceClaim_Call struct {
 
 // UnprepareResourceClaim is a helper method to define mock.On call
 //   - ctx context.Context
-//   - preparedDevice *types.PreparedDevice
-func (_e *MockDeviceStateIface_Expecter) UnprepareResourceClaim(ctx interface{}, preparedDevice interface{}) *MockDeviceStateIface_UnprepareResourceClaim_Call {
-	return &MockDeviceStateIface_UnprepareResourceClaim_Call{Call: _e.mock.On("UnprepareResourceClaim", ctx, preparedDevice)}
+//   - preparedDevices []*types.PreparedDevice
+func (_e *MockDeviceStateIface_Expecter) UnprepareResourceClaim(ctx interface{}, preparedDevices interface{}) *MockDeviceStateIface_UnprepareResourceClaim_Call {
+	return &MockDeviceStateIface_UnprepareResourceClaim_Call{Call: _e.mock.On("UnprepareResourceClaim", ctx, preparedDevices)}
 }
 
-func (_c *MockDeviceStateIface_UnprepareResourceClaim_Call) Run(run func(ctx context.Context, preparedDevice *types.PreparedDevice)) *MockDeviceStateIface_UnprepareResourceClaim_Call {
+func (_c *MockDeviceStateIface_UnprepareResourceClaim_Call) Run(run func(ctx context.Context, preparedDevices []*types.PreparedDevice)) *MockDeviceStateIface_UnprepareResourceClaim_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(*types.PreparedDevice))
+		run(args[0].(context.Context), args[1].([]*types.PreparedDevice))
 	})
 	return _c
 }
@@ -207,7 +207,7 @@ func (_c *MockDeviceStateIface_UnprepareResourceClaim_Call) Return(_a0 error) *M
 	return _c
 }
 
-func (_c *MockDeviceStateIface_UnprepareResourceClaim_Call) RunAndReturn(run func(context.Context, *types.PreparedDevice) error) *MockDeviceStateIface_UnprepareResourceClaim_Call {
+func (_c *MockDeviceStateIface_UnprepareResourceClaim_Call) RunAndReturn(run func(context.Context, []*types.PreparedDevice) error) *MockDeviceStateIface_UnprepareResourceClaim_Call {
 	_c.Call.Return(run)
 	return _c
 }

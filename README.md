@@ -136,8 +136,10 @@ kubectl get resourceslices -o wide
 ### Consume a device
 
 The recommended pattern is a `ResourceClaimTemplate` so that each pod gets its
-own claim. The pod-local claim name (here `vhost`) is used for the socket path,
-giving stable, predictable paths across pod restarts and VM migrations:
+own claim. The socket path is built from the pod-local claim name (here `vhost`)
+and the request name (here `vhost-port`), giving stable, predictable paths
+across pod restarts and VM migrations. A single claim can contain multiple
+requests, each getting its own socket directory:
 
 ```yaml
 apiVersion: resource.k8s.io/v1
@@ -196,12 +198,12 @@ kubectl get resourceclaim my-dpdk-pod-vhost-p6bzb \
   "bridgeName": "br-dpdk0",
   "cdiDeviceID": "ovsdpdk.k8snetworkplumbingwg.io/vhost-user=aaa85ca7",
   "mount": {
-    "containerDir": "/var/run/ovsdpdk/vhost-user/vhost",
-    "hostDir": "/var/run/ovsdpdk/c362b1d7-d4ea-4efe-9e90-e4cd83131baf/vhost"
+    "containerDir": "/var/run/ovsdpdk/vhost-user/vhost/vhost-port",
+    "hostDir": "/var/run/ovsdpdk/c362b1d7-d4ea-4efe-9e90-e4cd83131baf_vhost_vhost-port"
   },
   "socket": {
-    "containerPath": "/var/run/ovsdpdk/vhost-user/vhost/vhost.sock",
-    "hostPath": "/var/run/ovsdpdk/c362b1d7-d4ea-4efe-9e90-e4cd83131baf/vhost/vhost.sock"
+    "containerPath": "/var/run/ovsdpdk/vhost-user/vhost/vhost-port/vhost.sock",
+    "hostPath": "/var/run/ovsdpdk/c362b1d7-d4ea-4efe-9e90-e4cd83131baf_vhost_vhost-port/vhost.sock"
   }
 }
 ```

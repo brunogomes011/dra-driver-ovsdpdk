@@ -83,23 +83,25 @@ func makeClaim(uid, name, namespace string) *resourceapi.ResourceClaim {
 	}
 }
 
-// makePreparedDevice returns a minimal PreparedDevice for a claim.
-func makePreparedDevice(claimUID, claimName, claimNamespace string) *dratypes.PreparedDevice {
-	return &dratypes.PreparedDevice{
-		Device: kubeletplugin.Device{
-			Requests:     []string{"vhost-port"},
-			PoolName:     "test-node",
-			DeviceName:   "br-dpdk0",
-			CDIDeviceIDs: []string{"ovsdpdk.k8snetworkplumbingwg.io/vhost-user=abc123"},
-		},
-		ClaimNamespacedName: kubeletplugin.NamespacedObject{
-			NamespacedName: k8stypes.NamespacedName{
-				Name:      claimName,
-				Namespace: claimNamespace,
+// makePreparedDevices returns a minimal slice of PreparedDevice for a claim.
+func makePreparedDevices(claimUID, claimName, claimNamespace string) []*dratypes.PreparedDevice {
+	return []*dratypes.PreparedDevice{
+		{
+			Device: kubeletplugin.Device{
+				Requests:     []string{"vhost-port"},
+				PoolName:     "test-node",
+				DeviceName:   "br-dpdk0",
+				CDIDeviceIDs: []string{"ovsdpdk.k8snetworkplumbingwg.io/vhost-user=abc123"},
 			},
-			UID: k8stypes.UID(claimUID),
+			ClaimNamespacedName: kubeletplugin.NamespacedObject{
+				NamespacedName: k8stypes.NamespacedName{
+					Name:      claimName,
+					Namespace: claimNamespace,
+				},
+				UID: k8stypes.UID(claimUID),
+			},
+			BridgeName: "br-dpdk0",
 		},
-		BridgeName: "br-dpdk0",
 	}
 }
 
@@ -139,9 +141,9 @@ var _ = Describe("PrepareResourceClaims", func() {
 
 			callCount := 0
 			ds.EXPECT().PrepareResourceClaim(mock.Anything, mock.Anything).
-				RunAndReturn(func(_ context.Context, _ *resourceapi.ResourceClaim) (*dratypes.PreparedDevice, error) {
+				RunAndReturn(func(_ context.Context, _ *resourceapi.ResourceClaim) ([]*dratypes.PreparedDevice, error) {
 					callCount++
-					return makePreparedDevice("uid-1", "claim-1", "default"), nil
+					return makePreparedDevices("uid-1", "claim-1", "default"), nil
 				}).Once()
 
 			// First call — prepares and caches.
@@ -169,7 +171,7 @@ var _ = Describe("PrepareResourceClaims", func() {
 			claim = makeClaim("uid-2", "claim-2", "default")
 			_, _ = client.ResourceV1().ResourceClaims("default").Create(ctx, claim, metav1.CreateOptions{})
 			ds.EXPECT().PrepareResourceClaim(mock.Anything, mock.Anything).
-				Return(makePreparedDevice("uid-2", "claim-2", "default"), nil).Once()
+				Return(makePreparedDevices("uid-2", "claim-2", "default"), nil).Once()
 			var err error
 			result, err = drv.PrepareResourceClaims(ctx, []*resourceapi.ResourceClaim{claim})
 			Expect(err).NotTo(HaveOccurred())
@@ -181,10 +183,10 @@ var _ = Describe("PrepareResourceClaims", func() {
 			Expect(result[claim.UID].Devices[0].DeviceName).To(Equal("br-dpdk0"))
 		})
 
-		It("stores the prepared device in the pod manager", func() {
+		It("stores the prepared devices in the pod manager", func() {
 			cached, found := drv.podManager.Get(claim.UID)
 			Expect(found).To(BeTrue())
-			Expect(cached).NotTo(BeNil())
+			Expect(cached).To(HaveLen(1))
 		})
 
 		It("calls UpdateStatus on the k8s client", func() {
@@ -265,7 +267,7 @@ var _ = Describe("UnprepareResourceClaims", func() {
 	prepareClaim := func(claim *resourceapi.ResourceClaim) {
 		_, _ = client.ResourceV1().ResourceClaims(claim.Namespace).Create(ctx, claim, metav1.CreateOptions{})
 		ds.EXPECT().PrepareResourceClaim(mock.Anything, mock.Anything).
-			Return(makePreparedDevice(string(claim.UID), claim.Name, claim.Namespace), nil).Once()
+			Return(makePreparedDevices(string(claim.UID), claim.Name, claim.Namespace), nil).Once()
 		_, err := drv.PrepareResourceClaims(ctx, []*resourceapi.ResourceClaim{claim})
 		Expect(err).NotTo(HaveOccurred())
 	}
@@ -338,11 +340,11 @@ var _ = Describe("UnprepareResourceClaims", func() {
 			prepareClaim(claim2)
 
 			unprepareErr := errors.New("fail claim-8")
-			ds.EXPECT().UnprepareResourceClaim(mock.Anything, mock.MatchedBy(func(pd *dratypes.PreparedDevice) bool {
-				return pd.ClaimNamespacedName.UID == "uid-8"
+			ds.EXPECT().UnprepareResourceClaim(mock.Anything, mock.MatchedBy(func(pds []*dratypes.PreparedDevice) bool {
+				return len(pds) > 0 && pds[0].ClaimNamespacedName.UID == "uid-8"
 			})).Return(unprepareErr).Once()
-			ds.EXPECT().UnprepareResourceClaim(mock.Anything, mock.MatchedBy(func(pd *dratypes.PreparedDevice) bool {
-				return pd.ClaimNamespacedName.UID == "uid-9"
+			ds.EXPECT().UnprepareResourceClaim(mock.Anything, mock.MatchedBy(func(pds []*dratypes.PreparedDevice) bool {
+				return len(pds) > 0 && pds[0].ClaimNamespacedName.UID == "uid-9"
 			})).Return(nil).Once()
 
 			result, err := drv.UnprepareResourceClaims(ctx, []kubeletplugin.NamespacedObject{
@@ -359,5 +361,24 @@ var _ = Describe("UnprepareResourceClaims", func() {
 			Expect(found1).To(BeTrue())
 			Expect(found2).To(BeFalse())
 		})
+	})
+})
+
+var _ = Describe("preparedDevicesToResult", func() {
+	It("returns empty devices for nil input", func() {
+		result := preparedDevicesToResult(nil)
+		Expect(result.Err).To(BeNil())
+		Expect(result.Devices).To(BeEmpty())
+	})
+
+	It("maps each PreparedDevice to its Device field", func() {
+		pds := []*dratypes.PreparedDevice{
+			{Device: kubeletplugin.Device{DeviceName: "br-dpdk0", PoolName: "node-1"}},
+			{Device: kubeletplugin.Device{DeviceName: "br-dpdk1", PoolName: "node-1"}},
+		}
+		result := preparedDevicesToResult(pds)
+		Expect(result.Devices).To(HaveLen(2))
+		Expect(result.Devices[0].DeviceName).To(Equal("br-dpdk0"))
+		Expect(result.Devices[1].DeviceName).To(Equal("br-dpdk1"))
 	})
 })
