@@ -36,5 +36,5 @@ const (
 	HostRootPath = "/var/run/ovsdpdk"
 
 	// DefaultContainerRootPath is the default vhost-user container base path.
-	DefaultContainerRootPath = "/var/run/ovsdpdk/vhost-user"
+	DefaultContainerRootPath = "/var/run/ovsdpdk"
 )
