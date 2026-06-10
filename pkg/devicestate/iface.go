@@ -29,6 +29,6 @@ import (
 type DeviceStateIface interface {
 	SetRepublishCallback(callback func(ctx context.Context) error)
 	GetAllocatableDevices() AllocatableDevices
-	PrepareResourceClaim(ctx context.Context, claim *resourceapi.ResourceClaim) (*dratypes.PreparedDevice, error)
-	UnprepareResourceClaim(ctx context.Context, preparedDevice *dratypes.PreparedDevice) error
+	PrepareResourceClaim(ctx context.Context, claim *resourceapi.ResourceClaim) ([]*dratypes.PreparedDevice, error)
+	UnprepareResourceClaim(ctx context.Context, preparedDevices []*dratypes.PreparedDevice) error
 }
