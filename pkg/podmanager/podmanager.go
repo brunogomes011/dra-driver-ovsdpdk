@@ -29,18 +29,18 @@ import (
 // PodManager is a thread-safe cache of PreparedDevice records keyed by claim UID.
 type PodManager struct {
 	mu         sync.RWMutex
-	byClaimUID map[k8stypes.UID]*dratypes.PreparedDevice
+	byClaimUID map[k8stypes.UID][]*dratypes.PreparedDevice
 }
 
 // New creates a new PodManager.
 func New() *PodManager {
 	return &PodManager{
-		byClaimUID: make(map[k8stypes.UID]*dratypes.PreparedDevice),
+		byClaimUID: make(map[k8stypes.UID][]*dratypes.PreparedDevice),
 	}
 }
 
 // Get returns the PreparedDevice for the given claim UID.
-func (pm *PodManager) Get(claimUID k8stypes.UID) (*dratypes.PreparedDevice, bool) {
+func (pm *PodManager) Get(claimUID k8stypes.UID) ([]*dratypes.PreparedDevice, bool) {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 	sc, ok := pm.byClaimUID[claimUID]
@@ -48,7 +48,7 @@ func (pm *PodManager) Get(claimUID k8stypes.UID) (*dratypes.PreparedDevice, bool
 }
 
 // Set stores the PreparedDevice for the given claim UID.
-func (pm *PodManager) Set(claimUID k8stypes.UID, sc *dratypes.PreparedDevice) {
+func (pm *PodManager) Set(claimUID k8stypes.UID, sc []*dratypes.PreparedDevice) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	pm.byClaimUID[claimUID] = sc
@@ -56,7 +56,7 @@ func (pm *PodManager) Set(claimUID k8stypes.UID, sc *dratypes.PreparedDevice) {
 
 // Delete removes and returns the PreparedDevice for the given claim UID.
 // Returns nil if not found.
-func (pm *PodManager) Delete(claimUID k8stypes.UID) *dratypes.PreparedDevice {
+func (pm *PodManager) Delete(claimUID k8stypes.UID) []*dratypes.PreparedDevice {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	sc, ok := pm.byClaimUID[claimUID]
