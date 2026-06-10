@@ -13,7 +13,7 @@ spec:
   vhostUser:
     # containerRootPath is the path inside the consuming container where the
     # socket directory is bind-mounted by CDI.
-    containerRootPath: /var/run/ovsdpdk/vhost-user
+    containerRootPath: /var/run/ovsdpdk
     # selinuxLabel is the label that is applied to the socket directory.
     selinuxLabel: "system_u:object_r:container_file_t:s0"
     # user/group own the socket directory.  Use names or numeric IDs.

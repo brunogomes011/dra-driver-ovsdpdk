@@ -26,7 +26,7 @@ metadata:
   name: default
 spec:
   vhostUser:
-    containerRootPath: /var/run/ovsdpdk/vhost-user
+    containerRootPath: /var/run/ovsdpdk
     user: openvswitch       # name or numeric UID
     group: 107              # name or numeric GID
     selinuxLabel: "system_u:object_r:container_file_t:s0"
@@ -36,7 +36,7 @@ spec:
 
 | Field | Required | Description |
 |---|---|---|
-| `vhostUser.containerRootPath` | no | Container root for CDI mount. Default: `/var/run/ovsdpdk/vhost-user` |
+| `vhostUser.containerRootPath` | no | Container root for CDI mount. Default: `/var/run/ovsdpdk` |
 | `vhostUser.user` | no | Owner of the socket directory (name or UID) |
 | `vhostUser.group` | no | Group of the socket directory (name or GID) |
 | `vhostUser.selinuxLabel` | no | SELinux label applied to the socket directory (`user:role:type:level`) |
@@ -198,11 +198,11 @@ kubectl get resourceclaim my-dpdk-pod-vhost-p6bzb \
   "bridgeName": "br-dpdk0",
   "cdiDeviceID": "ovsdpdk.k8snetworkplumbingwg.io/vhost-user=aaa85ca7",
   "mount": {
-    "containerDir": "/var/run/ovsdpdk/vhost-user/vhost/vhost-port",
+    "containerDir": "/var/run/ovsdpdk/vhost/vhost-port",
     "hostDir": "/var/run/ovsdpdk/c362b1d7-d4ea-4efe-9e90-e4cd83131baf_vhost_vhost-port"
   },
   "socket": {
-    "containerPath": "/var/run/ovsdpdk/vhost-user/vhost/vhost-port/vhost.sock",
+    "containerPath": "/var/run/ovsdpdk/vhost/vhost-port/vhost.sock",
     "hostPath": "/var/run/ovsdpdk/c362b1d7-d4ea-4efe-9e90-e4cd83131baf_vhost_vhost-port/vhost.sock"
   }
 }

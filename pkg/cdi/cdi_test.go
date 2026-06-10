@@ -98,11 +98,11 @@ var _ = Describe("CDI Handler", func() {
 				BridgeName: testBridge,
 				Mount: dratypes.MountInfo{
 					HostDir:      "/var/run/ovsdpdk/pod-uid_my-claim",
-					ContainerDir: "/var/run/ovsdpdk/vhost-user/my-claim",
+					ContainerDir: "/var/run/ovsdpdk/my-claim",
 				},
 				Socket: dratypes.SocketInfo{
 					HostPath:      "/var/run/ovsdpdk/pod-uid_my-claim/vhost.sock",
-					ContainerPath: "/var/run/ovsdpdk/vhost-user/my-claim/vhost.sock",
+					ContainerPath: "/var/run/ovsdpdk/my-claim/vhost.sock",
 				},
 			}
 		})
@@ -268,7 +268,7 @@ var _ = Describe("CDI Handler", func() {
 				},
 				Mount: dratypes.MountInfo{
 					HostDir:      "/var/run/ovsdpdk/pod_del-claim",
-					ContainerDir: "/var/run/ovsdpdk/vhost-user/del-claim",
+					ContainerDir: "/var/run/ovsdpdk/del-claim",
 				},
 			}
 			Expect(handler.CreateClaimSpecFile([]*dratypes.PreparedDevice{pd})).To(Succeed())
