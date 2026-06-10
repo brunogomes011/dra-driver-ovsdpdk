@@ -103,9 +103,9 @@ make deploy
 
 # Or step by step:
 kubectl apply -f deployments/crds/
-kubectl apply -f deployments/namespace.yaml
-kubectl apply -f deployments/rbac.yaml
-sed "s|IMAGE|${IMAGE_NAME}:${IMAGE_TAG}|g" deployments/daemonset.yaml | kubectl apply -f -
+kubectl apply -f deployments/k8s/namespace.yaml
+kubectl apply -f deployments/k8s/rbac.yaml
+sed "s|IMAGE|${IMAGE_NAME}:${IMAGE_TAG}|g" deployments/k8s/daemonset.yaml | kubectl apply -f -
 ```
 
 Wait for rollout:
@@ -117,23 +117,27 @@ kubectl logs -n dra-driver-ovsdpdk -l app=dra-driver-ovsdpdk --prefix
 
 ### Configure the driver
 
-Apply the global config and a resource policy, then create a DeviceClass:
+
+Apply the global config and a resource policy.
 
 ```bash
 # Global vhost-user settings (edit to match your environment):
-kubectl apply -f deployments/example-config.yaml
+kubectl apply -f deployments/k8s/example-config.yaml
 
 # Bridge policy (edit bridges and nodeSelector):
-kubectl apply -f deployments/example-policy.yaml
-
-# DeviceClass:
-kubectl apply -f deployments/example-deviceclass.yaml
+kubectl apply -f deployments/k8s/example-policy.yaml
 ```
 
 Verify the driver published ResourceSlices:
 
 ```bash
 kubectl get resourceslices -o wide
+```
+
+### Create a DeviceClass
+
+```bash
+kubectl apply -f deployments/k8s/example-deviceclass.yaml
 ```
 
 ### Consume a device
@@ -217,9 +221,23 @@ kubectl get resourceclaim my-dpdk-pod-vhost-p6bzb \
 ```bash
 make undeploy
 # also remove config, policies, and the DeviceClass:
-kubectl delete -f deployments/example-config.yaml
-kubectl delete -f deployments/example-policy.yaml
-kubectl delete -f deployments/example-deviceclass.yaml
+kubectl delete -f deployments/k8s/example-config.yaml
+kubectl delete -f deployments/k8s/example-policy.yaml
+kubectl delete -f deployments/k8s/example-deviceclass.yaml
+```
+
+### Deploying on OpenShift
+
+#### Deploy
+
+```bash
+make deploy-openshift
+```
+
+To remove:
+
+```bash
+make undeploy-openshift
 ```
 
 ## Development
