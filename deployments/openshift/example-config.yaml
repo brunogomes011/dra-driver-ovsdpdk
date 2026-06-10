@@ -4,10 +4,10 @@
 # OVS-DPDK DRA driver.  The driver watches the object whose name matches the
 # --config-name flag (default: "default").
 #
-# Adjust user, group, and aclUsers to match your environment.
+# Adjust user, group, selinuxLabel, and aclUsers to match your environment.
 #
 # Apply with:
-#   kubectl apply -f deployments/example-config.yaml
+#   kubectl apply -f deployments/openshift/example-config.yaml
 
 apiVersion: ovsdpdk.k8snetworkplumbingwg.io/v1alpha1
 kind: OvsDpdkConfig
@@ -21,8 +21,8 @@ spec:
     # selinuxLabel is the label that is applied to the socket directory.
     selinuxLabel: "system_u:object_r:container_file_t:s0"
     # user/group own the socket directory.  Use names or numeric IDs.
-    #user: openvswitch
+    user: openvswitch
     group: 107
     # aclUsers receive an additional ACL entry (setfacl) on the directory.
-    #aclUsers:
-    #  - openvswitch
+    aclUsers:
+      - openvswitch

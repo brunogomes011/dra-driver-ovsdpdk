@@ -4,7 +4,7 @@
 # nodes.  Adjust the nodeSelector and bridge names to match your environment.
 #
 # Apply with:
-#   kubectl apply -f deployments/example-policy.yaml
+#   kubectl apply -f deployments/k8s/example-policy.yaml
 
 apiVersion: ovsdpdk.k8snetworkplumbingwg.io/v1alpha1
 kind: OvsDpdkResourcePolicy
