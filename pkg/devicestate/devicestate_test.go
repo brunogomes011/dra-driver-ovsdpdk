@@ -258,12 +258,12 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 			ds, mockFS, _ := newDeviceStateWithMockFS(ctx, &ovsdpdkdrav1alpha1.VhostUserSpec{
 				ContainerRootPath: "/container",
 			})
-			podUID := k8stypes.UID("pod-uid-5")
+			podUID := k8stypes.UID("pod-uid-handwritten")
 
 			expectedHostDir := filepath.Join(consts.HostRootPath, string(podUID)+"_"+"my-hand-written-claim"+"_"+"req-0")
 			mockFS.EXPECT().CreateSocketDir(mock.Anything, expectedHostDir, mock.Anything).Return(nil).Once()
 
-			claim := makeClaim("uid-5", podUID, "my-hand-written-claim", "vhost0", "br0")
+			claim := makeClaim("abcdef12-0000-0000-0000-000000000005", podUID, "my-hand-written-claim", "vhost0", "br0")
 			delete(claim.Annotations, resourceapi.PodResourceClaimAnnotation)
 			pd, err := ds.PrepareResourceClaim(ctx, claim)
 			Expect(err).NotTo(HaveOccurred())
