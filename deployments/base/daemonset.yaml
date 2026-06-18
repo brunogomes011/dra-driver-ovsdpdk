@@ -68,6 +68,8 @@ spec:
               mountPath: /var/run/cdi
             - name: socket-root
               mountPath: /var/run/ovsdpdk
+            - name: ovs-run
+              mountPath: /var/run/openvswitch
       volumes:
         - name: user-db
           emptyDir: {}
@@ -86,4 +88,8 @@ spec:
         - name: socket-root
           hostPath:
             path: /var/run/ovsdpdk
+            type: DirectoryOrCreate
+        - name: ovs-run
+          hostPath:
+            path: /var/run/openvswitch
             type: DirectoryOrCreate

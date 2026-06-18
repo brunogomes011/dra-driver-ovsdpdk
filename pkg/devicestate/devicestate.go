@@ -39,6 +39,7 @@ import (
 	ovsdpdkdrav1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsdpdkdra/v1alpha1"
 	dracdi "github.com/amorenoz/dra-driver-ovsdpdk/pkg/cdi"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/ovs"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/socketfs"
 	dratypes "github.com/amorenoz/dra-driver-ovsdpdk/pkg/types"
 )
@@ -56,6 +57,7 @@ type DeviceState struct {
 	vhostUserConfig   *ovsdpdkdrav1alpha1.VhostUserSpec
 	cdi               *dracdi.Handler
 	socketFS          socketfs.SocketFS
+	ovsClient         ovs.Client
 }
 
 // deviceStatusData is the driver-specific debug payload written into
@@ -67,13 +69,14 @@ type deviceStatusData struct {
 	CDIDeviceIDs []string            `json:"cdiDeviceID"`
 }
 
-// New creates a new DeviceState with the given CDI handler and SocketFS.
-func New(cdi *dracdi.Handler, socketFS socketfs.SocketFS) *DeviceState {
+// New creates a new DeviceState with the given CDI handler, SocketFS and OVS client.
+func New(cdi *dracdi.Handler, socketFS socketfs.SocketFS, ovsClient ovs.Client) *DeviceState {
 	ds := &DeviceState{
 		log:         klog.Background().WithName("DeviceState"),
 		allocatable: AllocatableDevices{},
 		cdi:         cdi,
 		socketFS:    socketFS,
+		ovsClient:   ovsClient,
 	}
 	ds.updateBridges(make([]ovsdpdkdrav1alpha1.BridgeSpec, 0))
 	return ds
