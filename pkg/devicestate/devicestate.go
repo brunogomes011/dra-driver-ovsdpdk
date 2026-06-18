@@ -224,8 +224,11 @@ func (d *DeviceState) prepareDevice(ctx context.Context, claim *resourceapi.Reso
 
 	hostSocketPath := filepath.Join(socketDir, consts.VhostSocketFilename)
 	portName := ovsPortName(claim.UID, result.Request)
+	params := ovsPortParams(claim.UID)
+
 	if d.ovsClient != nil {
-		if err := d.ovsClient.CreatePort(ctx, result.Device, portName, hostSocketPath); err != nil {
+		logger.Info("creating OVS port", "name", portName, "socket", hostSocketPath, "params", params)
+		if err := d.ovsClient.CreatePort(ctx, result.Device, portName, hostSocketPath, params); err != nil {
 			_ = d.socketFS.RemoveSocketDir(socketDir)
 			return nil, fmt.Errorf("create OVS port %q on bridge %q: %w", portName, result.Device, err)
 		}
@@ -404,6 +407,13 @@ func bridgeToDevice(bridge ovsdpdkdrav1alpha1.BridgeSpec) resourceapi.Device {
 func ovsPortName(claimUID k8stypes.UID, request string) string {
 	uid := strings.ReplaceAll(string(claimUID), "-", "")
 	return uid[:8] + "-" + request
+}
+
+// ovsPortParams creates the port parameters for a request.
+func ovsPortParams(claimUID k8stypes.UID) *ovs.OvsPortParams {
+	return &ovs.OvsPortParams{
+		ExternalIDs: map[string]string{"claim-uid": string(claimUID)},
+	}
 }
 
 // getPodClaimName returns the stable name of a claim in a Pod.

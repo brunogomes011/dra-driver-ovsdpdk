@@ -39,6 +39,12 @@ const (
 	defaultOVSRunDir = "/var/run/openvswitch"
 )
 
+// OvsPortParams the OVS port parameters.
+type OvsPortParams struct {
+	// ExternalIDs is written verbatim to external_ids on the OVS Port row.
+	ExternalIDs map[string]string
+}
+
 // OVSClient wraps the libovsdb client for interacting with OVSDB.
 type OVSClient struct {
 	client client.Client
@@ -129,7 +135,7 @@ func (c *OVSClient) Close() {
 }
 
 // CreatePort creates a dpdkvhostuserclient OVS port and its associated Interface.
-func (c *OVSClient) CreatePort(ctx context.Context, bridgeName, portName, socketPath string) error {
+func (c *OVSClient) CreatePort(ctx context.Context, bridgeName, portName, socketPath string, params *OvsPortParams) error {
 	iface := &Interface{
 		UUID:    "newiface",
 		Name:    portName,
@@ -142,9 +148,10 @@ func (c *OVSClient) CreatePort(ctx context.Context, bridgeName, portName, socket
 	}
 
 	port := &Port{
-		UUID:       "newport",
-		Name:       portName,
-		Interfaces: []string{"newiface"},
+		UUID:        "newport",
+		Name:        portName,
+		Interfaces:  []string{"newiface"},
+		ExternalIDs: params.ExternalIDs,
 	}
 	portOps, err := c.client.Create(port)
 	if err != nil {

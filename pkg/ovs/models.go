@@ -34,9 +34,10 @@ type Bridge struct {
 
 // Port represents a row in the Port table.
 type Port struct {
-	UUID       string   `ovsdb:"_uuid"`
-	Name       string   `ovsdb:"name"`
-	Interfaces []string `ovsdb:"interfaces"`
+	UUID        string            `ovsdb:"_uuid"`
+	Name        string            `ovsdb:"name"`
+	Interfaces  []string          `ovsdb:"interfaces"`
+	ExternalIDs map[string]string `ovsdb:"external_ids"`
 }
 
 // Interface represents a row in the Interface table.
