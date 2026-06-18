@@ -26,6 +26,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 
 	resourceapi "k8s.io/api/resource/v1"
@@ -221,11 +222,16 @@ func (d *DeviceState) prepareDevice(ctx context.Context, claim *resourceapi.Reso
 		return nil, fmt.Errorf("create socket directory %q: %w", socketDir, err)
 	}
 
-	// TODO: Create OVS port
+	hostSocketPath := filepath.Join(socketDir, consts.VhostSocketFilename)
+	portName := ovsPortName(claim.UID, result.Request)
+	if err := d.ovsClient.CreatePort(ctx, result.Device, portName, hostSocketPath); err != nil {
+		_ = d.socketFS.RemoveSocketDir(socketDir)
+		return nil, fmt.Errorf("create OVS port %q on bridge %q: %w", portName, result.Device, err)
+	}
 
 	cdiDeviceID := dracdi.DeviceID(claim.UID, result.Device, result.Request)
 	containerDir := getContainerDir(vhostConfig.ContainerRootPath, claim, result.Request)
-	containerPath := filepath.Join(containerDir, consts.VhostSocketFilename)
+	containerSocketPath := filepath.Join(containerDir, consts.VhostSocketFilename)
 
 	pd := &dratypes.PreparedDevice{
 		Device: kubeletplugin.Device{
@@ -235,7 +241,7 @@ func (d *DeviceState) prepareDevice(ctx context.Context, claim *resourceapi.Reso
 			CDIDeviceIDs: []string{cdiDeviceID},
 			Metadata: &kubeletplugin.DeviceMetadata{
 				Attributes: map[string]resourceapi.DeviceAttribute{
-					"vhost-user-path": {StringValue: ptr.To(containerPath)},
+					"vhost-user-path": {StringValue: ptr.To(containerSocketPath)},
 				},
 			},
 		},
@@ -246,14 +252,15 @@ func (d *DeviceState) prepareDevice(ctx context.Context, claim *resourceapi.Reso
 			},
 			UID: claim.UID,
 		},
-		BridgeName: result.Device,
+		BridgeName:  result.Device,
+		OVSPortName: portName,
 		Mount: dratypes.MountInfo{
 			HostDir:      socketDir,
 			ContainerDir: containerDir,
 		},
 		Socket: dratypes.SocketInfo{
-			HostPath:      filepath.Join(socketDir, consts.VhostSocketFilename),
-			ContainerPath: containerPath,
+			HostPath:      hostSocketPath,
+			ContainerPath: containerSocketPath,
 		},
 	}
 
@@ -297,7 +304,14 @@ func (d *DeviceState) unprepareDevice(ctx context.Context, pd *dratypes.Prepared
 		logger.Error(err, "Failed to delete CDI spec", "claimUID", claimUID)
 	}
 
-	// TODO: delete OVS port
+	if err := d.ovsClient.DeletePort(ctx, pd.BridgeName, pd.OVSPortName); err != nil {
+		if errors.Is(err, ovs.ErrPortNotFound) {
+			logger.Info("OVS port already gone, continuing cleanup", "port", pd.OVSPortName, "bridge", pd.BridgeName)
+		} else {
+			logger.Error(err, "Failed to delete OVS port", "port", pd.OVSPortName, "bridge", pd.BridgeName)
+			return fmt.Errorf("delete OVS port %q on bridge %q: %w", pd.OVSPortName, pd.BridgeName, err)
+		}
+	}
 
 	if err := d.socketFS.RemoveSocketDir(pd.Mount.HostDir); err != nil {
 		return err
@@ -379,6 +393,13 @@ func bridgeToDevice(bridge ovsdpdkdrav1alpha1.BridgeSpec) resourceapi.Device {
 			},
 		},
 	}
+}
+
+// ovsPortName derives a stable OVS port/interface name from the first 8 hex
+// chars of the claim UID (dashes stripped) and the request name.
+func ovsPortName(claimUID k8stypes.UID, request string) string {
+	uid := strings.ReplaceAll(string(claimUID), "-", "")
+	return uid[:8] + "-" + request
 }
 
 // getPodClaimName returns the stable name of a claim in a Pod.

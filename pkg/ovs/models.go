@@ -31,3 +31,18 @@ type Bridge struct {
 	Ports        []string `ovsdb:"ports"`
 	DatapathType string   `ovsdb:"datapath_type"`
 }
+
+// Port represents a row in the Port table.
+type Port struct {
+	UUID       string   `ovsdb:"_uuid"`
+	Name       string   `ovsdb:"name"`
+	Interfaces []string `ovsdb:"interfaces"`
+}
+
+// Interface represents a row in the Interface table.
+type Interface struct {
+	UUID    string            `ovsdb:"_uuid"`
+	Name    string            `ovsdb:"name"`
+	Type    string            `ovsdb:"type"`
+	Options map[string]string `ovsdb:"options"`
+}

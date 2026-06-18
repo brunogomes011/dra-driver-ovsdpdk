@@ -71,6 +71,7 @@ type PreparedDevice struct {
 	Device              kubeletplugin.Device
 	ClaimNamespacedName kubeletplugin.NamespacedObject
 	BridgeName          string
+	OVSPortName         string // name of the OVS port/interface created for this device
 	Mount               MountInfo
 	Socket              SocketInfo
 }

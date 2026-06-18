@@ -18,6 +18,7 @@ package ovs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -41,6 +42,12 @@ type Client interface {
 
 	// Close disconnects from OVSDB.
 	Close()
+
+	// CreatePort creates an OVS port.
+	CreatePort(ctx context.Context, bridgeName, portName, socketPath string) error
+
+	// DeletePort delets an OVS port.
+	DeletePort(ctx context.Context, bridgeName, portName string) error
 }
 
 // ovsClient wraps the libovsdb client for interacting with OVSDB.
@@ -58,6 +65,8 @@ func New(ctx context.Context, runDir string) (*ovsClient, error) {
 		map[string]model.Model{
 			"Open_vSwitch": &OpenvSwitch{},
 			"Bridge":       &Bridge{},
+			"Port":         &Port{},
+			"Interface":    &Interface{},
 		})
 	if err != nil {
 		return nil, fmt.Errorf("build OVSDB client model: %w", err)
@@ -130,4 +139,116 @@ func (c *ovsClient) Connected() bool {
 func (c *ovsClient) Close() {
 	c.log.Info("Closing OVSDB client")
 	c.client.Disconnect()
+}
+
+// CreatePort creates a dpdkvhostuserclient OVS port and its associated Interface.
+func (c *ovsClient) CreatePort(ctx context.Context, bridgeName, portName, socketPath string) error {
+	iface := &Interface{
+		UUID:    "newiface",
+		Name:    portName,
+		Type:    "dpdkvhostuserclient",
+		Options: map[string]string{"vhost-server-path": socketPath},
+	}
+	ifaceOps, err := c.client.Create(iface)
+	if err != nil {
+		return fmt.Errorf("build interface create op: %w", err)
+	}
+
+	port := &Port{
+		UUID:       "newport",
+		Name:       portName,
+		Interfaces: []string{"newiface"},
+	}
+	portOps, err := c.client.Create(port)
+	if err != nil {
+		return fmt.Errorf("build port create op: %w", err)
+	}
+
+	bridge := &Bridge{Name: bridgeName}
+	mutateOps, err := c.client.Where(bridge).Mutate(bridge, model.Mutation{
+		Field:   &bridge.Ports,
+		Mutator: ovsdb.MutateOperationInsert,
+		Value:   []string{"newport"},
+	})
+	if err != nil {
+		return fmt.Errorf("build bridge mutate op: %w", err)
+	}
+
+	ops := append(append(ifaceOps, portOps...), mutateOps...)
+	results, err := c.client.Transact(ctx, ops...)
+	if err != nil {
+		return fmt.Errorf("create port transaction: %w", err)
+	}
+	if opErrs, err := ovsdb.CheckOperationResults(results, ops); err != nil {
+		return fmt.Errorf("create port %q on bridge %q: %w", portName, bridgeName, joinOpErrors(opErrs))
+	}
+
+	c.log.Info("Created OVS port", "bridge", bridgeName, "port", portName, "socket", socketPath)
+	return nil
+}
+
+// DeletePort removes the named OVS port (and its Interface) from the named bridge.
+// Returns ErrPortNotFound (wrapped) if the port does not exist in OVSDB.
+func (c *ovsClient) DeletePort(ctx context.Context, bridgeName, portName string) error {
+	portUUID, err := c.findPortUUID(ctx, portName)
+	if err != nil {
+		return err
+	}
+	if portUUID == "" {
+		return ErrPortNotFound
+	}
+
+	// Remove port from Bridge.Ports; OVSDB GC handles the rest.
+	bridge := &Bridge{Name: bridgeName}
+	ops, err := c.client.Where(bridge).Mutate(bridge, model.Mutation{
+		Field:   &bridge.Ports,
+		Mutator: ovsdb.MutateOperationDelete,
+		Value:   []string{portUUID},
+	})
+	if err != nil {
+		return fmt.Errorf("build bridge mutate op: %w", err)
+	}
+
+	results, err := c.client.Transact(ctx, ops...)
+	if err != nil {
+		return fmt.Errorf("delete port transaction: %w", err)
+	}
+	if opErrs, err := ovsdb.CheckOperationResults(results, ops); err != nil {
+		return fmt.Errorf("delete port %q from bridge %q: %w", portName, bridgeName, joinOpErrors(opErrs))
+	}
+
+	c.log.Info("Deleted OVS port", "bridge", bridgeName, "port", portName)
+	return nil
+}
+
+// findPortUUID returns the OVSDB UUID of the named port via a Select
+// query to avoid monitoring all ports.
+func (c *ovsClient) findPortUUID(ctx context.Context, portName string) (string, error) {
+	port := &Port{Name: portName}
+	ops, err := c.client.Where(port).Select(port, &port.UUID)
+	if err != nil {
+		return "", fmt.Errorf("build select for port %q: %w", portName, err)
+	}
+	results, err := c.client.Transact(ctx, ops...)
+	if err != nil {
+		return "", fmt.Errorf("select port %q: %w", portName, err)
+	}
+	var ports []*Port
+	if err := c.client.GetSelectResults(ops, results, &ports); err != nil {
+		return "", fmt.Errorf("parse select results for port %q: %w", portName, err)
+	}
+	if len(ports) == 0 {
+		return "", nil
+	}
+	return ports[0].UUID, nil
+}
+
+// joinOpErrors converts a slice of ovsdb.OperationError to a single error
+// containing all individual error messages joined together.
+func joinOpErrors(opErrs []ovsdb.OperationError) error {
+	errs := make([]error, len(opErrs))
+	for i, e := range opErrs {
+		errs[i] = e
+	}
+	return errors.Join(errs...)
 }
