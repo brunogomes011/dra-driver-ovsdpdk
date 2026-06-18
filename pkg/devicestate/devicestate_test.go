@@ -49,7 +49,7 @@ var _ = Describe("DeviceState", func() {
 	var ds *devicestate.DeviceState
 
 	BeforeEach(func() {
-		ds = devicestate.New(nil, socketfsmocks.NewMockSocketFS(GinkgoT()))
+		ds = devicestate.New(nil, socketfsmocks.NewMockSocketFS(GinkgoT()), nil)
 	})
 
 	Describe("GetAllocatableDevices", func() {
@@ -500,7 +500,7 @@ func newDeviceStateWithMockFS(ctx SpecContext, vhostUser *ovsdpdkdrav1alpha1.Vho
 	mockFS := socketfsmocks.NewMockSocketFS(GinkgoT())
 	cdi, err := cdi.New(cdiRoot)
 	Expect(err).NotTo(HaveOccurred())
-	ds := devicestate.New(cdi, mockFS)
+	ds := devicestate.New(cdi, mockFS, nil)
 	Expect(ds.UpdateConfig(ctx, &ovsdpdkdrav1alpha1.OvsDpdkConfigSpec{VhostUser: vhostUser})).NotTo(HaveOccurred())
 	return ds, mockFS, cdiRoot
 }
