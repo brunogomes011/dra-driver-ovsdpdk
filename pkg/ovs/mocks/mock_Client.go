@@ -5,6 +5,7 @@ package mocks
 import (
 	context "context"
 
+	ovs "github.com/amorenoz/dra-driver-ovsdpdk/pkg/ovs"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -98,17 +99,17 @@ func (_c *MockClient_Connected_Call) RunAndReturn(run func() bool) *MockClient_C
 	return _c
 }
 
-// CreatePort provides a mock function with given fields: ctx, bridgeName, portName, socketPath
-func (_m *MockClient) CreatePort(ctx context.Context, bridgeName string, portName string, socketPath string) error {
-	ret := _m.Called(ctx, bridgeName, portName, socketPath)
+// CreatePort provides a mock function with given fields: ctx, bridgeName, portName, socketPath, params
+func (_m *MockClient) CreatePort(ctx context.Context, bridgeName string, portName string, socketPath string, params *ovs.OvsPortParams) error {
+	ret := _m.Called(ctx, bridgeName, portName, socketPath, params)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreatePort")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, string) error); ok {
-		r0 = rf(ctx, bridgeName, portName, socketPath)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, string, *ovs.OvsPortParams) error); ok {
+		r0 = rf(ctx, bridgeName, portName, socketPath, params)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -126,13 +127,14 @@ type MockClient_CreatePort_Call struct {
 //   - bridgeName string
 //   - portName string
 //   - socketPath string
-func (_e *MockClient_Expecter) CreatePort(ctx interface{}, bridgeName interface{}, portName interface{}, socketPath interface{}) *MockClient_CreatePort_Call {
-	return &MockClient_CreatePort_Call{Call: _e.mock.On("CreatePort", ctx, bridgeName, portName, socketPath)}
+//   - params *ovs.OvsPortParams
+func (_e *MockClient_Expecter) CreatePort(ctx interface{}, bridgeName interface{}, portName interface{}, socketPath interface{}, params interface{}) *MockClient_CreatePort_Call {
+	return &MockClient_CreatePort_Call{Call: _e.mock.On("CreatePort", ctx, bridgeName, portName, socketPath, params)}
 }
 
-func (_c *MockClient_CreatePort_Call) Run(run func(ctx context.Context, bridgeName string, portName string, socketPath string)) *MockClient_CreatePort_Call {
+func (_c *MockClient_CreatePort_Call) Run(run func(ctx context.Context, bridgeName string, portName string, socketPath string, params *ovs.OvsPortParams)) *MockClient_CreatePort_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(string))
+		run(args[0].(context.Context), args[1].(string), args[2].(string), args[3].(string), args[4].(*ovs.OvsPortParams))
 	})
 	return _c
 }
@@ -142,7 +144,7 @@ func (_c *MockClient_CreatePort_Call) Return(_a0 error) *MockClient_CreatePort_C
 	return _c
 }
 
-func (_c *MockClient_CreatePort_Call) RunAndReturn(run func(context.Context, string, string, string) error) *MockClient_CreatePort_Call {
+func (_c *MockClient_CreatePort_Call) RunAndReturn(run func(context.Context, string, string, string, *ovs.OvsPortParams) error) *MockClient_CreatePort_Call {
 	_c.Call.Return(run)
 	return _c
 }
