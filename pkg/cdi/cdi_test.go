@@ -86,7 +86,7 @@ var _ = Describe("CDI Handler", func() {
 					Requests:     []string{"req-0"},
 					PoolName:     "pool-0",
 					DeviceName:   testBridge,
-					CDIDeviceIDs: []string{cdi.DeviceID(testClaimUID, testBridge)},
+					CDIDeviceIDs: []string{cdi.DeviceID(testClaimUID, testBridge, "req-0")},
 				},
 				ClaimNamespacedName: kubeletplugin.NamespacedObject{
 					NamespacedName: k8stypes.NamespacedName{
@@ -108,39 +108,39 @@ var _ = Describe("CDI Handler", func() {
 		})
 
 		It("should write a spec file that can be read back", func() {
-			Expect(handler.CreateClaimSpecFile(pd)).To(Succeed())
+			Expect(handler.CreateClaimSpecFile([]*dratypes.PreparedDevice{pd})).To(Succeed())
 			spec := readSpec(cdiRoot, testClaimUID)
 			Expect(spec).NotTo(BeNil())
 		})
 
 		It("should write the correct CDI version", func() {
-			Expect(handler.CreateClaimSpecFile(pd)).To(Succeed())
+			Expect(handler.CreateClaimSpecFile([]*dratypes.PreparedDevice{pd})).To(Succeed())
 			spec := readSpec(cdiRoot, testClaimUID)
 			Expect(spec.Version).To(Equal("0.6.0"))
 		})
 
 		It("should write the correct CDI kind", func() {
-			Expect(handler.CreateClaimSpecFile(pd)).To(Succeed())
+			Expect(handler.CreateClaimSpecFile([]*dratypes.PreparedDevice{pd})).To(Succeed())
 			spec := readSpec(cdiRoot, testClaimUID)
 			Expect(spec.Kind).To(Equal("ovsdpdk.k8snetworkplumbingwg.io/vhost-user"))
 		})
 
 		It("should write exactly one device named after the claim UID and device name", func() {
-			Expect(handler.CreateClaimSpecFile(pd)).To(Succeed())
+			Expect(handler.CreateClaimSpecFile([]*dratypes.PreparedDevice{pd})).To(Succeed())
 			spec := readSpec(cdiRoot, testClaimUID)
 			Expect(spec.Devices).To(HaveLen(1))
-			Expect(spec.Devices[0].Name).To(Equal(string(testClaimUID) + "-" + testBridge))
+			Expect(spec.Devices[0].Name).To(Equal(string(testClaimUID) + "-" + testBridge + "-req-0"))
 		})
 
 		It("should write exactly one bind mount per device", func() {
-			Expect(handler.CreateClaimSpecFile(pd)).To(Succeed())
+			Expect(handler.CreateClaimSpecFile([]*dratypes.PreparedDevice{pd})).To(Succeed())
 			spec := readSpec(cdiRoot, testClaimUID)
 			mounts := spec.Devices[0].ContainerEdits.Mounts
 			Expect(mounts).To(HaveLen(1))
 		})
 
 		It("should bind-mount Mount.HostDir to Mount.ContainerDir", func() {
-			Expect(handler.CreateClaimSpecFile(pd)).To(Succeed())
+			Expect(handler.CreateClaimSpecFile([]*dratypes.PreparedDevice{pd})).To(Succeed())
 			spec := readSpec(cdiRoot, testClaimUID)
 			mount := spec.Devices[0].ContainerEdits.Mounts[0]
 			Expect(mount.HostPath).To(Equal(pd.Mount.HostDir))
@@ -148,19 +148,87 @@ var _ = Describe("CDI Handler", func() {
 		})
 
 		It("should set bind and rw mount options", func() {
-			Expect(handler.CreateClaimSpecFile(pd)).To(Succeed())
+			Expect(handler.CreateClaimSpecFile([]*dratypes.PreparedDevice{pd})).To(Succeed())
 			spec := readSpec(cdiRoot, testClaimUID)
 			opts := spec.Devices[0].ContainerEdits.Mounts[0].Options
 			Expect(opts).To(ContainElements("bind", "rw"))
 		})
 
+		It("should write one device and mount per PreparedDevice when multiple are provided", func() {
+			const testBridge2 = "br1"
+			pd2 := &dratypes.PreparedDevice{
+				Device: kubeletplugin.Device{
+					Requests:     []string{"req-1"},
+					PoolName:     "pool-0",
+					DeviceName:   testBridge2,
+					CDIDeviceIDs: []string{cdi.DeviceID(testClaimUID, testBridge2, "req-1")},
+				},
+				ClaimNamespacedName: pd.ClaimNamespacedName,
+				BridgeName:          testBridge2,
+				Mount: dratypes.MountInfo{
+					HostDir:      "/var/run/ovsdpdk/pod-uid_my-claim-br1",
+					ContainerDir: "/var/run/ovsdpdk/my-claim-br1",
+				},
+				Socket: dratypes.SocketInfo{
+					HostPath:      "/var/run/ovsdpdk/pod-uid_my-claim-br1/vhost.sock",
+					ContainerPath: "/var/run/ovsdpdk/my-claim-br1/vhost.sock",
+				},
+			}
+
+			Expect(handler.CreateClaimSpecFile([]*dratypes.PreparedDevice{pd, pd2})).To(Succeed())
+
+			spec := readSpec(cdiRoot, testClaimUID)
+			Expect(spec.Devices).To(HaveLen(2))
+
+			Expect(spec.Devices[0].Name).To(Equal(string(testClaimUID) + "-" + testBridge + "-req-0"))
+			Expect(spec.Devices[0].ContainerEdits.Mounts[0].HostPath).To(Equal(pd.Mount.HostDir))
+			Expect(spec.Devices[0].ContainerEdits.Mounts[0].ContainerPath).To(Equal(pd.Mount.ContainerDir))
+
+			Expect(spec.Devices[1].Name).To(Equal(string(testClaimUID) + "-" + testBridge2 + "-req-1"))
+			Expect(spec.Devices[1].ContainerEdits.Mounts[0].HostPath).To(Equal(pd2.Mount.HostDir))
+			Expect(spec.Devices[1].ContainerEdits.Mounts[0].ContainerPath).To(Equal(pd2.Mount.ContainerDir))
+		})
+
+		It("should produce unique device names when multiple requests use the same bridge", func() {
+			pd2 := &dratypes.PreparedDevice{
+				Device: kubeletplugin.Device{
+					Requests:     []string{"req-1"},
+					PoolName:     "pool-0",
+					DeviceName:   testBridge, // same bridge as pd
+					CDIDeviceIDs: []string{cdi.DeviceID(testClaimUID, testBridge, "req-1")},
+				},
+				ClaimNamespacedName: pd.ClaimNamespacedName,
+				BridgeName:          testBridge,
+				Mount: dratypes.MountInfo{
+					HostDir:      "/var/run/ovsdpdk/pod-uid_my-claim_req-1",
+					ContainerDir: "/var/run/ovsdpdk/my-claim/req-1",
+				},
+				Socket: dratypes.SocketInfo{
+					HostPath:      "/var/run/ovsdpdk/pod-uid_my-claim_req-1/vhost.sock",
+					ContainerPath: "/var/run/ovsdpdk/my-claim/req-1/vhost.sock",
+				},
+			}
+
+			Expect(handler.CreateClaimSpecFile([]*dratypes.PreparedDevice{pd, pd2})).To(Succeed())
+
+			spec := readSpec(cdiRoot, testClaimUID)
+			Expect(spec.Devices).To(HaveLen(2))
+
+			Expect(spec.Devices[0].Name).To(Equal(string(testClaimUID) + "-" + testBridge + "-req-0"))
+			Expect(spec.Devices[1].Name).To(Equal(string(testClaimUID) + "-" + testBridge + "-req-1"))
+			Expect(spec.Devices[0].Name).NotTo(Equal(spec.Devices[1].Name))
+
+			Expect(spec.Devices[0].ContainerEdits.Mounts[0].HostPath).To(Equal(pd.Mount.HostDir))
+			Expect(spec.Devices[1].ContainerEdits.Mounts[0].HostPath).To(Equal(pd2.Mount.HostDir))
+		})
+
 		It("should overwrite an existing spec file on a second call", func() {
-			Expect(handler.CreateClaimSpecFile(pd)).To(Succeed())
+			Expect(handler.CreateClaimSpecFile([]*dratypes.PreparedDevice{pd})).To(Succeed())
 
 			pd2 := *pd
 			pd2.Mount.HostDir = "/new/socket/dir"
 			pd2.Mount.ContainerDir = "/new/container/path"
-			Expect(handler.CreateClaimSpecFile(&pd2)).To(Succeed())
+			Expect(handler.CreateClaimSpecFile([]*dratypes.PreparedDevice{&pd2})).To(Succeed())
 
 			spec := readSpec(cdiRoot, testClaimUID)
 			mount := spec.Devices[0].ContainerEdits.Mounts[0]
@@ -171,7 +239,7 @@ var _ = Describe("CDI Handler", func() {
 		It("should return an error when the CDI root does not exist", func() {
 			h, err := cdi.New("/nonexistent/cdi/root")
 			Expect(err).NotTo(HaveOccurred())
-			err = h.CreateClaimSpecFile(pd)
+			err = h.CreateClaimSpecFile([]*dratypes.PreparedDevice{pd})
 			Expect(err).To(HaveOccurred())
 		})
 	})
@@ -189,7 +257,7 @@ var _ = Describe("CDI Handler", func() {
 					Requests:     []string{"req-0"},
 					PoolName:     "pool-0",
 					DeviceName:   delBridge,
-					CDIDeviceIDs: []string{cdi.DeviceID(delClaimUID, delBridge)},
+					CDIDeviceIDs: []string{cdi.DeviceID(delClaimUID, delBridge, "req-0")},
 				},
 				ClaimNamespacedName: kubeletplugin.NamespacedObject{
 					NamespacedName: k8stypes.NamespacedName{
@@ -203,7 +271,7 @@ var _ = Describe("CDI Handler", func() {
 					ContainerDir: "/var/run/ovsdpdk/vhost-user/del-claim",
 				},
 			}
-			Expect(handler.CreateClaimSpecFile(pd)).To(Succeed())
+			Expect(handler.CreateClaimSpecFile([]*dratypes.PreparedDevice{pd})).To(Succeed())
 		})
 
 		It("should remove the spec file from disk", func() {

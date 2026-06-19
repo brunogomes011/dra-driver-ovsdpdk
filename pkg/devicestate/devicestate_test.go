@@ -330,7 +330,7 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 			pd, err := ds.PrepareResourceClaim(ctx, claim)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(pd[0].Device.CDIDeviceIDs).To(HaveLen(1))
-			Expect(pd[0].Device.CDIDeviceIDs[0]).To(Equal(cdi.DeviceID(claimUID, "br0")))
+			Expect(pd[0].Device.CDIDeviceIDs[0]).To(Equal(cdi.DeviceID(claimUID, "br0", "req-0")))
 		})
 
 		It("should write a CDI spec file on success", func(ctx SpecContext) {
@@ -391,8 +391,8 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 
 			Expect(pds[0].Device.CDIDeviceIDs).To(HaveLen(1))
 			Expect(pds[1].Device.CDIDeviceIDs).To(HaveLen(1))
-			Expect(pds[0].Device.CDIDeviceIDs[0]).To(Equal(cdi.DeviceID(claimUID, "br0")))
-			Expect(pds[1].Device.CDIDeviceIDs[0]).To(Equal(cdi.DeviceID(claimUID, "br1")))
+			Expect(pds[0].Device.CDIDeviceIDs[0]).To(Equal(cdi.DeviceID(claimUID, "br0", "req-0")))
+			Expect(pds[1].Device.CDIDeviceIDs[0]).To(Equal(cdi.DeviceID(claimUID, "br1", "req-1")))
 
 			// Paths must be distinct per request.
 			Expect(pds[0].Mount.HostDir).To(Equal(filepath.Join(consts.HostRootPath, string(podUID)+"_vhost-multi_req-0")))

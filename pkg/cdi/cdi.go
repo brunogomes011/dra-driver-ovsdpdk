@@ -56,43 +56,48 @@ func New(cdiRoot string) (*Handler, error) {
 }
 
 // DeviceID returns the fully-qualified CDI device ID for the given claim UID.
-func DeviceID(claimUID k8stypes.UID, device string) string {
-	return cdiparser.QualifiedName(cdiVendor, cdiClass, fmt.Sprintf("%s-%s", string(claimUID), device))
+func DeviceID(claimUID k8stypes.UID, device, request string) string {
+	return cdiparser.QualifiedName(cdiVendor, cdiClass, fmt.Sprintf("%s-%s-%s", string(claimUID), device, request))
 }
 
-// CreateClaimSpecFile writes a CDI spec file for the given claim. The spec
-// contains a single device with one bind-mount of the per-claim socket directory.
-func (h *Handler) CreateClaimSpecFile(pd *dratypes.PreparedDevice) error {
-	logger := h.log.WithValues("claimName", pd.ClaimNamespacedName.Name,
-		"claimNamespace", pd.ClaimNamespacedName.Namespace)
+// CreateClaimSpecFile writes a CDI spec file for the list of PreparedDevices. The spec
+// contains a single device with one bind-mount of the per-request socket directory.
+func (h *Handler) CreateClaimSpecFile(preparedDevices []*dratypes.PreparedDevice) error {
+	claim := preparedDevices[0].ClaimNamespacedName
+	logger := h.log.WithValues("claimName", claim.Name, "claimNamespace", claim.Namespace)
 
-	claimUID := string(pd.ClaimNamespacedName.UID)
+	claimUID := string(claim.UID)
 	specName := cdiapi.GenerateTransientSpecName(cdiVendor, cdiClass, claimUID)
+
+	// Combine CDI specs of all prepared devices.
+	cdiDevices := []cdispecs.Device{}
+	for _, pd := range preparedDevices {
+		cdiDev := cdispecs.Device{
+			Name: fmt.Sprintf("%s-%s-%s", claimUID, pd.Device.DeviceName, pd.Device.Requests[0]),
+			ContainerEdits: cdispecs.ContainerEdits{
+				Mounts: []*cdispecs.Mount{
+					{
+						HostPath:      pd.Mount.HostDir,
+						ContainerPath: pd.Mount.ContainerDir,
+						Options:       []string{"bind", "rw"},
+					},
+				},
+			},
+		}
+		cdiDevices = append(cdiDevices, cdiDev)
+	}
 
 	raw := &cdispecs.Spec{
 		Version: "0.6.0",
 		Kind:    cdiKind,
-		Devices: []cdispecs.Device{
-			{
-				Name: fmt.Sprintf("%s-%s", claimUID, pd.Device.DeviceName),
-				ContainerEdits: cdispecs.ContainerEdits{
-					Mounts: []*cdispecs.Mount{
-						{
-							HostPath:      pd.Mount.HostDir,
-							ContainerPath: pd.Mount.ContainerDir,
-							Options:       []string{"bind", "rw"},
-						},
-					},
-				},
-			},
-		},
+		Devices: cdiDevices,
 	}
 
 	if err := h.cache.WriteSpec(raw, specName); err != nil {
 		return fmt.Errorf("write CDI spec for claim %s: %w", claimUID, err)
 	}
 
-	logger.Info("CDI spec written", "deviceID", pd.Device.CDIDeviceIDs, "specName", specName)
+	logger.Info("CDI spec written", "claimUID", claimUID, "specName", specName)
 	return nil
 }
 
