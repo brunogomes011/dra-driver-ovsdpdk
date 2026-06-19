@@ -195,11 +195,9 @@ func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourcea
 		return nil, fmt.Errorf("no allocation results for driver %s", consts.DriverName)
 	}
 
-	for _, pd := range preparedDevices {
-		if err := d.cdi.CreateClaimSpecFile(pd); err != nil {
-			logger.Error(err, "error creating CDI spec file")
-			return nil, d.rollback(ctx, fmt.Errorf("error creating CDI spec file: %v", err), preparedDevices)
-		}
+	if err := d.cdi.CreateClaimSpecFile(preparedDevices); err != nil {
+		logger.Error(err, "error creating CDI spec file")
+		return nil, d.rollback(ctx, fmt.Errorf("error creating CDI spec file: %v", err), preparedDevices)
 	}
 
 	return preparedDevices, nil
@@ -222,7 +220,7 @@ func (d *DeviceState) prepareDevice(ctx context.Context, claim *resourceapi.Reso
 
 	// TODO: Create OVS port
 
-	cdiDeviceID := dracdi.DeviceID(claim.UID, result.Device)
+	cdiDeviceID := dracdi.DeviceID(claim.UID, result.Device, result.Request)
 	containerDir := getContainerDir(vhostConfig.ContainerRootPath, claim, result.Request)
 	containerPath := filepath.Join(containerDir, consts.VhostSocketFilename)
 
