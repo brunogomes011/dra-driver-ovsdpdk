@@ -36,6 +36,7 @@ type Bridge struct {
 type Port struct {
 	UUID        string            `ovsdb:"_uuid"`
 	Name        string            `ovsdb:"name"`
+	Tag         *int              `ovsdb:"tag"`
 	Interfaces  []string          `ovsdb:"interfaces"`
 	ExternalIDs map[string]string `ovsdb:"external_ids"`
 }
