@@ -38,6 +38,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	ovsdpdkdrav1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsdpdkdra/v1alpha1"
+	ovsportv1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsport/v1alpha1"
 	dracdi "github.com/amorenoz/dra-driver-ovsdpdk/pkg/cdi"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/ovs"
@@ -210,6 +211,16 @@ func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourcea
 func (d *DeviceState) prepareDevice(ctx context.Context, claim *resourceapi.ResourceClaim, result *resourceapi.DeviceRequestAllocationResult) (*dratypes.PreparedDevice, error) {
 	logger := klog.FromContext(ctx).WithName("prepareDevice")
 
+	portConfig, err := ParseClaimConfig(claim.Status.Allocation.Devices.Config, consts.DriverName, result.Request)
+	if err != nil {
+		return nil, fmt.Errorf("parse claim config: %w", err)
+	}
+	if portConfig != nil {
+		logger.V(2).Info("Parsed port config", "portConfig", portConfig)
+	} else {
+		portConfig = ovsportv1alpha1.DefaultOvsPortConfig()
+	}
+
 	podUID := k8stypes.UID(claim.Status.ReservedFor[0].UID)
 
 	vhostConfig := d.GetVhostUserConfig()
@@ -267,6 +278,7 @@ func (d *DeviceState) prepareDevice(ctx context.Context, claim *resourceapi.Reso
 			HostPath:      hostSocketPath,
 			ContainerPath: containerSocketPath,
 		},
+		PortConfig: portConfig,
 	}
 
 	logger.Info("Prepared vhost-user socket", pd)
