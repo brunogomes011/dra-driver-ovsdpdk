@@ -34,6 +34,11 @@ const (
 // ResourceClaim. It carries user-specified values for OVS port properties.
 type OvsPortConfig struct {
 	metav1.TypeMeta `json:",inline"`
+
+	// Vlan is the VLAN ID to configure on the OVS port (0-4095).
+	// When unset, the port is untagged.
+	// +optional
+	Vlan *int `json:"vlan,omitempty"`
 }
 
 func DefaultOvsPortConfig() *OvsPortConfig {

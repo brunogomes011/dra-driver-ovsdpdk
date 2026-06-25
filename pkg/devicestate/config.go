@@ -57,10 +57,21 @@ func ParseClaimConfig(configs []resourceapi.DeviceAllocationConfiguration, drive
 			return nil, fmt.Errorf("unexpected apiVersion %q in claim config: want %q", portConfig.APIVersion, ovsportv1alpha1.APIVersion)
 		}
 
+		if err := validatePortConfig(&portConfig); err != nil {
+			return nil, fmt.Errorf("OvsPortConfig validation failed: %w", err)
+		}
+
 		// Empty Requests means "applies to all".
 		if len(cfg.Requests) == 0 || slices.Contains(cfg.Requests, requestName) {
 			return &portConfig, nil
 		}
 	}
 	return nil, nil
+}
+
+func validatePortConfig(config *ovsportv1alpha1.OvsPortConfig) error {
+	if config.Vlan != nil && (*config.Vlan < 0 || *config.Vlan > 4095) {
+		return fmt.Errorf("vlan %d out of range [0, 4095]", *config.Vlan)
+	}
+	return nil
 }
