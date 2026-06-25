@@ -18,6 +18,7 @@ package devicestate_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -31,10 +32,12 @@ import (
 
 	resourceapi "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 
 	ovsdpdkdrav1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsdpdkdra/v1alpha1"
+	ovsportv1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsport/v1alpha1"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/cdi"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/devicestate"
@@ -597,6 +600,81 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 			Expect(socketAttr.StringValue).NotTo(BeNil())
 			Expect(*socketAttr.StringValue).To(Equal(pd[0].Socket.ContainerPath))
 			Expect(*socketAttr.StringValue).To(HavePrefix(consts.DefaultContainerRootPath))
+		})
+	})
+})
+
+var _ = Describe("DeviceState port config", func() {
+	makeClaimWithConfig := func(claimUID, podUID k8stypes.UID, claimName, podClaimName, bridgeName string, configs []resourceapi.DeviceAllocationConfiguration) *resourceapi.ResourceClaim {
+		claim := makeClaim(claimUID, podUID, claimName, podClaimName, bridgeName)
+		claim.Status.Allocation.Devices.Config = configs
+		return claim
+	}
+
+	makePortConfigEntry := func(cfg ovsportv1alpha1.OvsPortConfig) resourceapi.DeviceAllocationConfiguration {
+		raw, err := json.Marshal(cfg)
+		Expect(err).NotTo(HaveOccurred())
+		return resourceapi.DeviceAllocationConfiguration{
+			Source: resourceapi.AllocationConfigSourceClaim,
+			DeviceConfiguration: resourceapi.DeviceConfiguration{
+				Opaque: &resourceapi.OpaqueDeviceConfiguration{
+					Driver:     consts.DriverName,
+					Parameters: runtime.RawExtension{Raw: raw},
+				},
+			},
+		}
+	}
+
+	Describe("PrepareResourceClaim with OvsPortConfig", func() {
+		It("should set PortConfig to the default when no opaque config is present", func(ctx SpecContext) {
+			ds, mockFS, mockOVS, _ := newDeviceStateWithMocks(ctx, nil)
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+			mockOVS.EXPECT().CreatePort(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+			claim := makeClaim("abcdef12-0000-0000-0000-000000000040", "pod-uid-pc0", "claim-pc0", "vhost-pc0", "br0")
+			pd, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pd[0].PortConfig).NotTo(BeNil())
+			Expect(*pd[0].PortConfig).To(Equal(*ovsportv1alpha1.DefaultOvsPortConfig()))
+		})
+
+		It("should parse a valid OvsPortConfig and store it in PortConfig", func(ctx SpecContext) {
+			ds, mockFS, mockOVS, _ := newDeviceStateWithMocks(ctx, nil)
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+			mockOVS.EXPECT().CreatePort(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+			cfg := ovsportv1alpha1.OvsPortConfig{}
+			cfg.APIVersion = ovsportv1alpha1.APIVersion
+			cfg.Kind = ovsportv1alpha1.KindOvsPortConfig
+
+			claim := makeClaimWithConfig(
+				"abcdef12-0000-0000-0000-000000000041", "pod-uid-pc1",
+				"claim-pc1", "vhost-pc1", "br0",
+				[]resourceapi.DeviceAllocationConfiguration{makePortConfigEntry(cfg)},
+			)
+			pd, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pd[0].PortConfig).NotTo(BeNil())
+			Expect(pd[0].PortConfig.Kind).To(Equal(ovsportv1alpha1.KindOvsPortConfig))
+			Expect(pd[0].PortConfig.APIVersion).To(Equal(ovsportv1alpha1.APIVersion))
+		})
+
+		It("should return an error when the opaque config has an invalid kind", func(ctx SpecContext) {
+			ds, mockFS, mockOVS, _ := newDeviceStateWithMocks(ctx, nil)
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+			mockOVS.EXPECT().CreatePort(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+			cfg := ovsportv1alpha1.OvsPortConfig{}
+			cfg.APIVersion = ovsportv1alpha1.APIVersion
+			cfg.Kind = "WrongKind"
+
+			claim := makeClaimWithConfig(
+				"abcdef12-0000-0000-0000-000000000042", "pod-uid-pc2",
+				"claim-pc2", "vhost-pc2", "br0",
+				[]resourceapi.DeviceAllocationConfiguration{makePortConfigEntry(cfg)},
+			)
+			_, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).To(MatchError(ContainSubstring("unexpected kind")))
 		})
 	})
 })

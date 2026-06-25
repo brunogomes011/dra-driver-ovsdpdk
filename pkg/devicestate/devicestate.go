@@ -38,6 +38,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	ovsdpdkdrav1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsdpdkdra/v1alpha1"
+	ovsportv1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsport/v1alpha1"
 	dracdi "github.com/amorenoz/dra-driver-ovsdpdk/pkg/cdi"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/ovs"
@@ -181,12 +182,17 @@ func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourcea
 		return nil, fmt.Errorf("multiple pods found for claim %s/%s not supported", claim.Namespace, claim.Name)
 	}
 
+	portConfigs, err := parseClaimConfigs(claim.Status.Allocation.Devices.Config)
+	if err != nil {
+		return nil, fmt.Errorf("parse claim configs: %w", err)
+	}
+
 	for _, result := range claim.Status.Allocation.Devices.Results {
 		if result.Driver != consts.DriverName {
 			continue
 		}
 
-		preparedDevice, err := d.prepareDevice(ctx, claim, &result)
+		preparedDevice, err := d.prepareDevice(ctx, claim, &result, portConfigs.getConfig(result.Request))
 		if err != nil {
 			logger.Error(err, "error preparing device", "result", result)
 			return nil, d.rollback(ctx, fmt.Errorf("error preparing device: %v", err), preparedDevices)
@@ -207,7 +213,7 @@ func (d *DeviceState) PrepareResourceClaim(ctx context.Context, claim *resourcea
 	return preparedDevices, nil
 }
 
-func (d *DeviceState) prepareDevice(ctx context.Context, claim *resourceapi.ResourceClaim, result *resourceapi.DeviceRequestAllocationResult) (*dratypes.PreparedDevice, error) {
+func (d *DeviceState) prepareDevice(ctx context.Context, claim *resourceapi.ResourceClaim, result *resourceapi.DeviceRequestAllocationResult, portConfig *ovsportv1alpha1.OvsPortConfig) (*dratypes.PreparedDevice, error) {
 	logger := klog.FromContext(ctx).WithName("prepareDevice")
 
 	podUID := k8stypes.UID(claim.Status.ReservedFor[0].UID)
@@ -265,6 +271,7 @@ func (d *DeviceState) prepareDevice(ctx context.Context, claim *resourceapi.Reso
 			HostPath:      hostSocketPath,
 			ContainerPath: containerSocketPath,
 		},
+		PortConfig: portConfig,
 	}
 
 	logger.Info("Prepared successful", "device", pd)

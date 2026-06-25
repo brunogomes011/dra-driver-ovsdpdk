@@ -2,7 +2,7 @@
 
 A Kubernetes [Dynamic Resource Allocation (DRA)](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/) driver that exposes OVS-DPDK bridges as schedulable devices. Each allocated device gets a unique per-pod vhost-user socket directory, bind-mounted into the container via CDI.
 
-> **Status:** proof-of-concept / experimentation. OVS port creation is not yet wired; the driver manages socket directories and claim status only.
+> **Status:** proof-of-concept / experimentation.
 
 ## How it works
 
