@@ -676,6 +676,47 @@ var _ = Describe("DeviceState port config", func() {
 			_, err := ds.PrepareResourceClaim(ctx, claim)
 			Expect(err).To(MatchError(ContainSubstring("unexpected kind")))
 		})
+
+		It("should store the vlan from OvsPortConfig in PortConfig", func(ctx SpecContext) {
+			ds, mockFS, mockOVS, _ := newDeviceStateWithMocks(ctx, nil)
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+			mockOVS.EXPECT().CreatePort(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+			cfg := ovsportv1alpha1.OvsPortConfig{}
+			cfg.APIVersion = ovsportv1alpha1.APIVersion
+			cfg.Kind = ovsportv1alpha1.KindOvsPortConfig
+			cfg.Vlan = ptr.To(100)
+
+			claim := makeClaimWithConfig(
+				"abcdef12-0000-0000-0000-000000000043", "pod-uid-pc3",
+				"claim-pc3", "vhost-pc3", "br0",
+				[]resourceapi.DeviceAllocationConfiguration{makePortConfigEntry(cfg)},
+			)
+			pd, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pd[0].PortConfig).NotTo(BeNil())
+			Expect(pd[0].PortConfig.Vlan).NotTo(BeNil())
+			Expect(*pd[0].PortConfig.Vlan).To(Equal(100))
+		})
+
+		It("should return an error when vlan is out of range", func(ctx SpecContext) {
+			ds, mockFS, mockOVS, _ := newDeviceStateWithMocks(ctx, nil)
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+			mockOVS.EXPECT().CreatePort(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+			cfg := ovsportv1alpha1.OvsPortConfig{}
+			cfg.APIVersion = ovsportv1alpha1.APIVersion
+			cfg.Kind = ovsportv1alpha1.KindOvsPortConfig
+			cfg.Vlan = ptr.To(5000)
+
+			claim := makeClaimWithConfig(
+				"abcdef12-0000-0000-0000-000000000044", "pod-uid-pc4",
+				"claim-pc4", "vhost-pc4", "br0",
+				[]resourceapi.DeviceAllocationConfiguration{makePortConfigEntry(cfg)},
+			)
+			_, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).To(MatchError(ContainSubstring("out of range")))
+		})
 	})
 })
 

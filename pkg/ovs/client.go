@@ -39,6 +39,8 @@ const (
 type OvsPortParams struct {
 	// ExternalIDs is written verbatim to external_ids on the OVS Port row.
 	ExternalIDs map[string]string
+	// Vlan, when non-nil, sets the 802.1Q access VLAN tag on the port.
+	Vlan *int
 }
 
 // Client defines the interface for interacting with OVSDB.
@@ -163,6 +165,7 @@ func (c *ovsClient) CreatePort(ctx context.Context, bridgeName, portName, socket
 	port := &Port{
 		UUID:        "newport",
 		Name:        portName,
+		Tag:         params.Vlan,
 		Interfaces:  []string{"newiface"},
 		ExternalIDs: params.ExternalIDs,
 	}
@@ -190,7 +193,7 @@ func (c *ovsClient) CreatePort(ctx context.Context, bridgeName, portName, socket
 		return fmt.Errorf("create port %q on bridge %q: %w", portName, bridgeName, joinOpErrors(opErrs))
 	}
 
-	c.log.Info("Created OVS port", "bridge", bridgeName, "port", portName, "socket", socketPath)
+	c.log.Info("Created OVS port", "bridge", bridgeName, "port", portName, "socket", socketPath, "params", params)
 	return nil
 }
 

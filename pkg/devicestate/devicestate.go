@@ -65,10 +65,11 @@ type DeviceState struct {
 // deviceStatusData is the driver-specific debug payload written into
 // ResourceClaim.Status.Devices[].Data after a successful prepare.
 type deviceStatusData struct {
-	Mount        dratypes.MountInfo  `json:"mount"`
-	Socket       dratypes.SocketInfo `json:"socket"`
-	BridgeName   string              `json:"bridgeName"`
-	CDIDeviceIDs []string            `json:"cdiDeviceID"`
+	Mount        dratypes.MountInfo             `json:"mount"`
+	Socket       dratypes.SocketInfo            `json:"socket"`
+	BridgeName   string                         `json:"bridgeName"`
+	CDIDeviceIDs []string                       `json:"cdiDeviceID"`
+	Config       *ovsportv1alpha1.OvsPortConfig `json:"config,omitempty"`
 }
 
 // New creates a new DeviceState with the given CDI handler, SocketFS and OVS client.
@@ -230,7 +231,7 @@ func (d *DeviceState) prepareDevice(ctx context.Context, claim *resourceapi.Reso
 
 	hostSocketPath := filepath.Join(socketDir, consts.VhostSocketFilename)
 	portName := ovsPortName(claim.UID, result.Request)
-	params := ovsPortParams(claim)
+	params := ovsPortParams(claim, portConfig)
 
 	logger.Info("creating OVS port", "name", portName, "socket", hostSocketPath, "params", params)
 	if err := d.ovsClient.CreatePort(ctx, result.Device, portName, hostSocketPath, params); err != nil {
@@ -360,6 +361,7 @@ func updateClaimStatus(
 		Socket:       pd.Socket,
 		BridgeName:   pd.BridgeName,
 		CDIDeviceIDs: pd.Device.CDIDeviceIDs,
+		Config:       pd.PortConfig,
 	})
 	if err != nil {
 		logger.Error(err, "Failed to marshal claim status data", "claimUID", claim.UID)
@@ -417,7 +419,7 @@ func ovsPortName(claimUID k8stypes.UID, request string) string {
 }
 
 // ovsPortParams creates the port parameters for a request.
-func ovsPortParams(claim *resourceapi.ResourceClaim) *ovs.OvsPortParams {
+func ovsPortParams(claim *resourceapi.ResourceClaim, portConfig *ovsportv1alpha1.OvsPortConfig) *ovs.OvsPortParams {
 	return &ovs.OvsPortParams{
 		ExternalIDs: map[string]string{
 			"claim-uid":  string(claim.UID),
@@ -425,6 +427,7 @@ func ovsPortParams(claim *resourceapi.ResourceClaim) *ovs.OvsPortParams {
 			"namespace":  claim.Namespace,
 			"pod-name":   claim.Status.ReservedFor[0].Name,
 		},
+		Vlan: portConfig.Vlan,
 	}
 }
 
