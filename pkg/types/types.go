@@ -30,6 +30,7 @@ import (
 type Flags struct {
 	NodeName                      string
 	Namespace                     string
+	ConfigName                    string
 	CdiRoot                       string
 	KubeletRegistrarDirectoryPath string
 	KubeletPluginsDirectoryPath   string

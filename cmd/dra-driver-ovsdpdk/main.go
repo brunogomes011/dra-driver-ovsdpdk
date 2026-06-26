@@ -32,7 +32,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
-	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/controller"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/controllers"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/devicestate"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/flags"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/types"
@@ -69,6 +69,13 @@ func newApp() *cli.App {
 			Value:       consts.DefaultNamespace,
 			Destination: &f.Namespace,
 			EnvVars:     []string{"NAMESPACE"},
+		},
+		&cli.StringFlag{
+			Name:        "config-name",
+			Usage:       "Name of the OvsDpdkConfig cluster-scoped object to watch.",
+			Value:       "default",
+			Destination: &f.ConfigName,
+			EnvVars:     []string{"CONFIG_NAME"},
 		},
 		&cli.StringFlag{
 			Name:        "cdi-root",
@@ -177,7 +184,7 @@ func run(ctx context.Context, config *types.Config) error {
 
 	devState := devicestate.New()
 
-	reconciler := controller.NewOvsDpdkResourcePolicyReconciler(
+	reconciler := controllers.NewOvsDpdkResourcePolicyReconciler(
 		config.Manager.GetClient(),
 		config.Flags.NodeName,
 		config.Flags.Namespace,
@@ -185,6 +192,15 @@ func run(ctx context.Context, config *types.Config) error {
 	)
 	if err := reconciler.SetupWithManager(config.Manager); err != nil {
 		return fmt.Errorf("setup controller: %w", err)
+	}
+
+	configReconciler := controllers.NewOvsDpdkConfigReconciler(
+		config.Manager.GetClient(),
+		config.Flags.ConfigName,
+		devState,
+	)
+	if err := configReconciler.SetupWithManager(config.Manager); err != nil {
+		return fmt.Errorf("setup config controller: %w", err)
 	}
 
 	mgrErrCh := make(chan error, 1)

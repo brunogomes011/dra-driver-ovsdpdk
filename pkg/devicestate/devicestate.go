@@ -39,6 +39,18 @@ func New() *DeviceState {
 	}
 }
 
+// UpdateConfig is called by the controller whenever the OvsDpdkConfig object changes.
+// spec is nil when the config object does not exist.
+func (d *DeviceState) UpdateConfig(ctx context.Context, spec *ovsdpdkdrav1alpha1.OvsDpdkConfigSpec) error {
+	logger := klog.FromContext(ctx).WithName("UpdateConfig")
+	if spec == nil {
+		logger.Info("No OvsDpdkConfig found, using defaults")
+		return nil
+	}
+	logger.Info("Config updated")
+	return nil
+}
+
 // UpdatePolicyDevices is called by the controller whenever the set of matching
 // OvsDpdkResourcePolicy objects changes. bridges is the consolidated list of
 // bridge specs that apply to this node.
