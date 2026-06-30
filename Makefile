@@ -100,6 +100,7 @@ $(MOCKERY):
 
 build-image:
 	$(CONTAINER_TOOL) build \
+		--platform $(GOOS)/$(GOARCH) \
 		--build-arg GOLANG_VERSION=$(GOLANG_VERSION) \
 		-t $(IMAGE_NAME):$(IMAGE_TAG) \
 		-f $(CURDIR)/Dockerfile \
