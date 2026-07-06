@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/ovn-kubernetes/libovsdb/cache"
 	"github.com/ovn-kubernetes/libovsdb/client"
 	"github.com/ovn-kubernetes/libovsdb/model"
 	"github.com/ovn-kubernetes/libovsdb/ovsdb"
@@ -39,6 +40,20 @@ const (
 	defaultOVSRunDir = "/var/run/openvswitch"
 )
 
+// BridgeEventType indicates whether a bridge was added or deleted.
+type BridgeEventType int
+
+const (
+	BridgeAdded BridgeEventType = iota
+	BridgeDeleted
+)
+
+// BridgeEvent represents a bridge add/delete notification from the OVSDB monitor.
+type BridgeEvent struct {
+	Name string
+	Type BridgeEventType
+}
+
 // OvsPortParams the OVS port parameters.
 type OvsPortParams struct {
 	// ExternalIDs is written verbatim to external_ids on the OVS Port row.
@@ -49,8 +64,9 @@ type OvsPortParams struct {
 
 // OVSClient wraps the libovsdb client for interacting with OVSDB.
 type OVSClient struct {
-	client client.Client
-	log    klog.Logger
+	client         client.Client
+	log            klog.Logger
+	bridgeNotifier func(BridgeEvent)
 }
 
 // New creates an OVSClient and blocks until the initial OVSDB connection
@@ -108,8 +124,39 @@ func New(ctx context.Context, endpoint string) (*OVSClient, error) {
 	return c, nil
 }
 
-// startMonitor starts monitoring relevant tables in the OVSDB.
+// startMonitor registers a cache event handler for bridge add/delete events
+// and starts a conditional OVSDB monitor that tracks only Bridge rows with
+// datapath_type == "netdev" (DPDK bridges).
 func (c *OVSClient) startMonitor(ctx context.Context) error {
+	c.client.Cache().AddEventHandler(&cache.EventHandlerFuncs{
+		AddFunc: func(table string, m model.Model) {
+			if table != "Bridge" {
+				return
+			}
+			br, ok := m.(*Bridge)
+			if !ok {
+				return
+			}
+			c.log.V(2).Info("Bridge added", "name", br.Name, "datapathType", br.DatapathType)
+			if c.bridgeNotifier != nil {
+				c.bridgeNotifier(BridgeEvent{Name: br.Name, Type: BridgeAdded})
+			}
+		},
+		DeleteFunc: func(table string, m model.Model) {
+			if table != "Bridge" {
+				return
+			}
+			br, ok := m.(*Bridge)
+			if !ok {
+				return
+			}
+			c.log.V(2).Info("Bridge deleted", "name", br.Name)
+			if c.bridgeNotifier != nil {
+				c.bridgeNotifier(BridgeEvent{Name: br.Name, Type: BridgeDeleted})
+			}
+		},
+	})
+
 	bridgeProto := &Bridge{}
 	monitor := c.client.NewMonitor(
 		// Only monitor bridges with datapath_type == "netdev" (DPDK bridges).
@@ -134,6 +181,27 @@ func (c *OVSClient) Connected() bool {
 func (c *OVSClient) Close() {
 	c.log.Info("Closing OVSDB client")
 	c.client.Disconnect()
+}
+
+// SetBridgeNotifier sets a callback that is invoked whenever a DPDK bridge
+// (datapath_type == "netdev") is added or deleted in OVSDB.
+//
+// The callback runs on the libovsdb cache goroutine, so it must not block.
+func (c *OVSClient) SetBridgeNotifier(fn func(BridgeEvent)) {
+	c.bridgeNotifier = fn
+}
+
+// BridgeExists reports whether a bridge with the given name currently exists
+// in the local OVSDB cache.
+func (c *OVSClient) BridgeExists(name string) (bool, error) {
+	br := Bridge{Name: name}
+	if err := c.client.Get(context.Background(), &br); err == nil {
+		return true, nil
+	} else if err == client.ErrNotFound {
+		return false, nil
+	} else {
+		return false, err
+	}
 }
 
 // CreatePort creates a dpdkvhostuserclient OVS port and its associated Interface.

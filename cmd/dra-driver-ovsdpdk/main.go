@@ -230,6 +230,7 @@ func run(ctx context.Context, config *types.Config) error {
 		config.Flags.NodeName,
 		config.Flags.Namespace,
 		devState,
+		ovsClient,
 	)
 	if err := reconciler.SetupWithManager(config.Manager); err != nil {
 		return fmt.Errorf("setup controller: %w", err)
