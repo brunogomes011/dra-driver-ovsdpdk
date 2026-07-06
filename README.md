@@ -44,7 +44,6 @@ spec:
 
 > The host root path is fixed at `/var/run/ovsdpdk`.
 
-
 ### OvsDpdkResourcePolicy (namespaced)
 
 Defines which OVS bridges to advertise as DRA devices and on which nodes.
@@ -73,6 +72,40 @@ spec:
 | `bridges[].name` | yes | OVS bridge name to advertise as a DRA device |
 | `nodeSelector` | no | Limit to matching nodes; omit for all nodes |
 
+
+### OvsPortConfig (per-allocation, in ResourceClaim)
+
+Allows per-allocation customization of OVS port properties. Embed it in the `devices.config` stanza of a `ResourceClaim` or `ResourceClaimTemplate`; the driver reads and validates it when preparing the device.
+
+```yaml
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: dpdk-port-tagged
+spec:
+  spec:
+    devices:
+      requests:
+        - name: vhost-port
+          exactly:
+            deviceClassName: ovsdpdk
+      config:
+        - opaque:
+            driver: ovsdpdk.k8snetworkplumbingwg.io
+            parameters:
+              apiVersion: ovsdpdk.k8snetworkplumbingwg.io/v1alpha1
+              kind: OvsPortConfig
+              vlan: 100
+```
+
+Field specification:
+
+| Field | Required | Description |
+|---|---|---|
+| `vlan` | no | VLAN ID to tag the OVS port (0–4095). Omit for an untagged port. |
+
+
+> The `kind` must be `OvsPortConfig` and `apiVersion` must be `ovsdpdk.k8snetworkplumbingwg.io/v1alpha1`; the driver rejects configs with mismatched values.
 
 ## Deploying
 
