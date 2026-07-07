@@ -18,8 +18,16 @@
 // Open vSwitch database (OVSDB).
 package ovs
 
-// OpenvSwitch represents a row in the Open_vSwitch table.
+// OpenvSwitch represents a row in the Open_vSwitch root table.
 type OpenvSwitch struct {
 	UUID    string   `ovsdb:"_uuid"`
 	Bridges []string `ovsdb:"bridges"`
+}
+
+// Bridge represents a row in the Bridge table.
+type Bridge struct {
+	UUID         string   `ovsdb:"_uuid"`
+	Name         string   `ovsdb:"name"`
+	Ports        []string `ovsdb:"ports"`
+	DatapathType string   `ovsdb:"datapath_type"`
 }

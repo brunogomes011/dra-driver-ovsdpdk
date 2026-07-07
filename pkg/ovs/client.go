@@ -25,6 +25,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/ovn-kubernetes/libovsdb/client"
 	"github.com/ovn-kubernetes/libovsdb/model"
+	"github.com/ovn-kubernetes/libovsdb/ovsdb"
 	"k8s.io/klog/v2"
 )
 
@@ -56,6 +57,7 @@ func New(ctx context.Context, runDir string) (*ovsClient, error) {
 	dbModel, err := model.NewClientDBModel("Open_vSwitch",
 		map[string]model.Model{
 			"Open_vSwitch": &OpenvSwitch{},
+			"Bridge":       &Bridge{},
 		})
 	if err != nil {
 		return nil, fmt.Errorf("build OVSDB client model: %w", err)
@@ -89,10 +91,34 @@ func New(ctx context.Context, runDir string) (*ovsClient, error) {
 
 	log.Info("OVSDB connection established", "endpoint", endpoint)
 
-	return &ovsClient{
+	c := &ovsClient{
 		client: ovs,
 		log:    log,
-	}, nil
+	}
+
+	if err := c.startMonitor(ctx); err != nil {
+		ovs.Disconnect()
+		return nil, fmt.Errorf("start bridge monitor: %w", err)
+	}
+
+	return c, nil
+}
+
+// startMonitor starts monitoring relevant tables in the OVSDB.
+func (c *ovsClient) startMonitor(ctx context.Context) error {
+	bridgeProto := &Bridge{}
+	monitor := c.client.NewMonitor(
+		// Only monitor bridges with datapath_type == "netdev" (DPDK bridges).
+		client.WithConditionalTable(bridgeProto, []model.Condition{{
+			Field:    &bridgeProto.DatapathType,
+			Function: ovsdb.ConditionEqual,
+			Value:    "netdev",
+		}}),
+	)
+	if _, err := c.client.Monitor(ctx, monitor); err != nil {
+		return fmt.Errorf("monitor Bridge table: %w", err)
+	}
+	return nil
 }
 
 // Connected reports whether the client currently has an active OVSDB connection.
