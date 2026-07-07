@@ -1,4 +1,7 @@
 with-expecter: true
+resolve-type-alias: false
+disable-version-string: true
+issue-845-fix: true
 packages:
   github.com/amorenoz/dra-driver-ovsdpdk/pkg/socketfs:
     config:
@@ -6,3 +9,9 @@ packages:
       outpkg: "mocks"
     interfaces:
       SocketFS:
+  github.com/amorenoz/dra-driver-ovsdpdk/pkg/devicestate:
+    config:
+      dir: "pkg/devicestate/mocks"
+      outpkg: "mocks"
+    interfaces:
+      DeviceStateIface:

@@ -36,14 +36,14 @@ import (
 type Driver struct {
 	log         klog.Logger
 	nodeName    string
-	deviceState *devicestate.DeviceState
+	deviceState devicestate.DeviceStateIface
 	podManager  *podmanager.PodManager
 	helper      *kubeletplugin.Helper
 	client      coreclientset.Interface
 }
 
 // New creates a new Driver and registers it with kubelet.
-func New(ctx context.Context, devState *devicestate.DeviceState, kubeClient coreclientset.Interface, nodeName, pluginDataDir string) (*Driver, error) {
+func New(ctx context.Context, devState devicestate.DeviceStateIface, kubeClient coreclientset.Interface, nodeName, pluginDataDir string) (*Driver, error) {
 	logger := klog.FromContext(ctx).WithName("driver")
 
 	d := &Driver{
