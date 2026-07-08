@@ -37,6 +37,7 @@ import (
 
 	ovsdpdkdrav1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsdpdkdra/v1alpha1"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/devicestate"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/dp"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/ovs"
 )
 
@@ -52,6 +53,7 @@ type OvsDpdkResourcePolicyReconciler struct {
 	log                klog.Logger
 	deviceStateManager *devicestate.DeviceState
 	ovsClient          *ovs.OVSClient
+	dpManager          *dp.Manager
 }
 
 // NewOvsDpdkResourcePolicyReconciler creates a new OvsDpdkResourcePolicyReconciler.
@@ -60,6 +62,7 @@ func NewOvsDpdkResourcePolicyReconciler(
 	nodeName, namespace string,
 	deviceStateManager *devicestate.DeviceState,
 	ovsClient *ovs.OVSClient,
+	dpManager *dp.Manager,
 ) *OvsDpdkResourcePolicyReconciler {
 	return &OvsDpdkResourcePolicyReconciler{
 		Client:             c,
@@ -68,6 +71,7 @@ func NewOvsDpdkResourcePolicyReconciler(
 		log:                klog.Background().WithName("OvsDpdkResourcePolicyReconciler"),
 		deviceStateManager: deviceStateManager,
 		ovsClient:          ovsClient,
+		dpManager:          dpManager,
 	}
 }
 
@@ -134,6 +138,10 @@ func (r *OvsDpdkResourcePolicyReconciler) Reconcile(ctx context.Context, req ctr
 	if err := r.deviceStateManager.UpdatePolicyDevices(ctx, activeBridges); err != nil {
 		r.log.Error(err, "Failed to update policy devices")
 		return ctrl.Result{}, err
+	}
+
+	if r.dpManager != nil {
+		r.dpManager.UpdateResources(ctx, activeBridges)
 	}
 
 	return ctrl.Result{}, nil
