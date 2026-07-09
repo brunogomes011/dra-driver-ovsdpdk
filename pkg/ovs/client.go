@@ -78,6 +78,7 @@ type OVSClient struct {
 	client         client.Client
 	log            klog.Logger
 	bridgeNotifier func(BridgeEvent)
+	ifaceNotifier  func(bridgeName string)
 
 	numaMu  sync.RWMutex
 	numaMap map[string]map[string]int // bridgeName → ifaceUUID → numaNode
@@ -245,6 +246,12 @@ func (c *OVSClient) SetBridgeNotifier(fn func(BridgeEvent)) {
 	c.bridgeNotifier = fn
 }
 
+// SetInterfaceNotifier sets a callback that is invoked whenever a DPDK
+// interface is added or removed from a bridge.
+func (c *OVSClient) SetInterfaceNotifier(fn func(bridgeName string)) {
+	c.ifaceNotifier = fn
+}
+
 // processInterfaceEvents is a background goroutine that reads ifaceEvents and
 // updates the numaMap accordingly.
 func (c *OVSClient) processInterfaceEvents(ctx context.Context) {
@@ -298,6 +305,10 @@ func (c *OVSClient) handleInterfaceAdd(ctx context.Context, ev ifaceEvent) {
 
 	c.log.V(2).Info("Resolved DPDK interface NUMA node",
 		"interface", ev.name, "bridge", bridge.Name, "numaNode", numaNode)
+
+	if c.ifaceNotifier != nil {
+		c.ifaceNotifier(bridge.Name)
+	}
 }
 
 // handleInterfaceDelete removes a deleted dpdk interface from numaMap.
@@ -313,6 +324,9 @@ func (c *OVSClient) handleInterfaceDelete(ev ifaceEvent) {
 			}
 			c.log.V(2).Info("Removed DPDK interface from NUMA map",
 				"interface", ev.name, "bridge", bridgeName)
+			if c.ifaceNotifier != nil {
+				c.ifaceNotifier(bridgeName)
+			}
 			return
 		}
 	}
