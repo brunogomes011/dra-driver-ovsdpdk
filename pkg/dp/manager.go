@@ -24,8 +24,20 @@ import (
 
 	ovsdpdkdrav1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsdpdkdra/v1alpha1"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
-	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/ovs"
 )
+
+// numaProvider is the subset of the OVS client used by the Manager.
+// *ovs.OVSClient satisfies this interface.
+type numaProvider interface {
+	BridgeNUMANodes(bridgeName string) []int
+	SetInterfaceNotifier(fn func(bridgeName string))
+}
+
+// newServerFunc is the factory used by the Manager to create topology DP servers.
+// Overridden in tests to return mocks.
+var newServerFunc = func(resourceName string, numaNode, deviceCount int) TopologyDPServer {
+	return newServer(resourceName, numaNode, deviceCount)
+}
 
 // Manager manages the lifecycle of topology Device Plugin servers.
 // Manager reacts to two events:
@@ -33,24 +45,24 @@ import (
 // - Updates from OVS informing DPDK interfaces have been created or deleted from existing
 // bridges
 type Manager struct {
-	mutex     sync.Mutex
-	topology  map[string]string  // bridgeName → topologyResource
-	servers   map[string]*Server // bridgeName → running Server
-	ovsClient *ovs.OVSClient
-	ctx       context.Context
-	log       klog.Logger
+	mutex    sync.Mutex
+	topology map[string]string           // bridgeName → topologyResource
+	servers  map[string]TopologyDPServer // bridgeName → running server
+	numa     numaProvider
+	ctx      context.Context
+	log      klog.Logger
 }
 
 // NewManager creates a Manager.
-func NewManager(ctx context.Context, ovsClient *ovs.OVSClient) *Manager {
+func NewManager(ctx context.Context, numa numaProvider) *Manager {
 	m := &Manager{
-		topology:  make(map[string]string),
-		servers:   make(map[string]*Server),
-		ovsClient: ovsClient,
-		ctx:       ctx,
-		log:       klog.Background().WithName("dp.Manager"),
+		topology: make(map[string]string),
+		servers:  make(map[string]TopologyDPServer),
+		numa:     numa,
+		ctx:      ctx,
+		log:      klog.Background().WithName("dp.Manager"),
 	}
-	ovsClient.SetInterfaceNotifier(m.OnInterfaceChange)
+	numa.SetInterfaceNotifier(m.OnInterfaceChange)
 	return m
 }
 
@@ -120,7 +132,7 @@ func (m *Manager) ensureServer(bridgeName, resourceName string) {
 
 	if srv, exists := m.servers[bridgeName]; exists {
 		// Correct NUMA, nothing to do.
-		if srv.numaNode == numaNode {
+		if srv.GetNUMA() == numaNode {
 			return
 		}
 		// NUMA changed, stop old server.
@@ -133,7 +145,7 @@ func (m *Manager) ensureServer(bridgeName, resourceName string) {
 	// Start a new server.
 	logger.Info("Starting topology Device Plugin",
 		"bridge", bridgeName, "resource", resourceName, "numaNode", numaNode)
-	srv := newServer(resourceName, numaNode, consts.DefaultTopologyDeviceCount)
+	srv := newServerFunc(resourceName, numaNode, consts.DefaultTopologyDeviceCount)
 	if err := srv.start(m.ctx); err != nil {
 		logger.Error(err, "Failed to start topology Device Plugin",
 			"bridge", bridgeName, "resource", resourceName)
@@ -144,7 +156,7 @@ func (m *Manager) ensureServer(bridgeName, resourceName string) {
 
 // getValidNUMA retrieves and validates the NUMA node from a bridge.
 func (m *Manager) getValidNUMA(logger klog.Logger, bridgeName string) int {
-	nodes := m.ovsClient.BridgeNUMANodes(bridgeName)
+	nodes := m.numa.BridgeNUMANodes(bridgeName)
 
 	switch {
 	case len(nodes) == 0:
