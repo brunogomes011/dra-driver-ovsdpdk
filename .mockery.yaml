@@ -1,0 +1,4 @@
+with-expecter: true
+packages:
+  github.com/amorenoz/dra-driver-ovsdpdk:
+    interfaces: {}

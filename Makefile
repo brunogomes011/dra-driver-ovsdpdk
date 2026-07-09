@@ -18,6 +18,7 @@ MODULE      := github.com/amorenoz/dra-driver-ovsdpdk
 GOLANG_VERSION        ?= 1.24
 GOLANGCI_LINT_VERSION ?= v2.7.2
 CONTROLLER_GEN_VERSION ?= v0.21.0
+MOCKERY_VERSION        ?= v2.53.6
 
 CONTAINER_TOOL ?= podman
 REGISTRY       ?= quay.io/amorenoz
@@ -31,7 +32,7 @@ BIN_DIR := $(CURDIR)/bin
 
 APIS := ovsdpdkdra/v1alpha1
 
-.PHONY: all build binary check vet lint test coverage vendor generate generate-deepcopy generate-crds build-image push-image
+.PHONY: all build binary check vet lint test coverage vendor generate generate-deepcopy generate-crds generate-mocks build-image push-image
 
 all: check test build
 
@@ -69,7 +70,7 @@ vendor:
 
 CONTROLLER_GEN := $(BIN_DIR)/controller-gen
 
-generate: generate-deepcopy generate-crds
+generate: generate-deepcopy generate-crds generate-mocks
 
 generate-deepcopy: $(CONTROLLER_GEN)
 	for api in $(APIS); do \
@@ -88,6 +89,14 @@ generate-crds: $(CONTROLLER_GEN)
 
 $(CONTROLLER_GEN):
 	GOBIN=$(BIN_DIR) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION)
+
+MOCKERY := $(BIN_DIR)/mockery
+
+generate-mocks: $(MOCKERY)
+	$(MOCKERY)
+
+$(MOCKERY):
+	GOBIN=$(BIN_DIR) go install github.com/vektra/mockery/v2@$(MOCKERY_VERSION)
 
 build-image:
 	$(CONTAINER_TOOL) build \
