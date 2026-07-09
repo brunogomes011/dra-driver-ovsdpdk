@@ -21,3 +21,11 @@ packages:
       outpkg: "mocks"
     interfaces:
       DeviceStateIface:
+  github.com/amorenoz/dra-driver-ovsdpdk/pkg/dp:
+    config:
+      dir: "pkg/dp"
+      outpkg: "dp"
+      inpackage: true
+    interfaces:
+      numaProvider:
+      TopologyDPServer:
