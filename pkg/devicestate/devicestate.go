@@ -302,6 +302,7 @@ func (d *DeviceState) UnprepareResourceClaim(ctx context.Context, preparedDevice
 func (d *DeviceState) unprepareDevice(ctx context.Context, pd *dratypes.PreparedDevice) error {
 	logger := klog.FromContext(ctx).WithName("unprepareDevice")
 	claimUID := pd.ClaimNamespacedName.UID
+	var errs []error
 
 	if err := d.cdi.DeleteClaimSpecFile(claimUID); err != nil {
 		logger.Error(err, "Failed to delete CDI spec", "claimUID", claimUID)
@@ -312,14 +313,17 @@ func (d *DeviceState) unprepareDevice(ctx context.Context, pd *dratypes.Prepared
 			logger.Info("OVS port already gone, continuing cleanup", "port", pd.OVSPortName, "bridge", pd.BridgeName)
 		} else {
 			logger.Error(err, "Failed to delete OVS port", "port", pd.OVSPortName, "bridge", pd.BridgeName)
-			return fmt.Errorf("delete OVS port %q on bridge %q: %w", pd.OVSPortName, pd.BridgeName, err)
+			errs = append(errs, err)
 		}
 	}
 
 	if err := d.socketFS.RemoveSocketDir(pd.Mount.HostDir); err != nil {
-		return err
+		errs = append(errs, err)
 	}
 
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
 	logger.Info("Cleaned up claim resources", "claimUID", claimUID, "socketDir", pd.Mount.HostDir)
 	return nil
 }

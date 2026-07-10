@@ -567,6 +567,7 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 			mockOVS.EXPECT().CreatePort(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 			mockOVS.EXPECT().DeletePort(mock.Anything, mock.Anything, mock.Anything).Return(fmt.Errorf("OVSDB connection lost")).Once()
+			mockFS.EXPECT().RemoveSocketDir(mock.Anything).Return(nil).Once()
 
 			claim := makeClaim("abcdef12-0000-0000-0000-000000000042", "pod-uid-delfail", "claim-delfail", "vhost-delfail", "br0")
 			pd, err := ds.PrepareResourceClaim(ctx, claim)
