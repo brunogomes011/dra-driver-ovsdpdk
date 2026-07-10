@@ -1,4 +1,8 @@
 with-expecter: true
 packages:
-  github.com/amorenoz/dra-driver-ovsdpdk:
-    interfaces: {}
+  github.com/amorenoz/dra-driver-ovsdpdk/pkg/socketfs:
+    config:
+      dir: "pkg/socketfs/mocks"
+      outpkg: "mocks"
+    interfaces:
+      SocketFS:
