@@ -1,0 +1,36 @@
+{
+  "spec": {
+    "template": {
+      "spec": {
+        "volumes": [
+          {
+            "name": "hugepage",
+            "emptyDir": {
+              "medium": "HugePages"
+            }
+          }
+        ],
+        "containers": [
+          {
+            "name": "ovs-vswitchd",
+            "resources": {
+              "requests": {
+                "hugepages-2Mi": "1Gi",
+                "memory": "1Gi"
+              },
+              "limits": {
+                "hugepages-2Mi": "1Gi"
+              }
+            },
+            "volumeMounts": [
+              {
+                "name": "hugepage",
+                "mountPath": "/dev/hugepages"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

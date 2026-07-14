@@ -1,0 +1,180 @@
+# OVS DaemonSet for e2e testing — runs on every non-control-plane node.
+#
+# Two containers share the same pod:
+#   ovsdb        — runs ovsdb-server; bind-mounts /var/run/openvswitch on the
+#                  host so that db.sock is accessible to the DRA driver DaemonSet
+#                  (which also mounts that path as a hostPath volume).
+#                  Also reads configuration from the "ovs-config" ConfigMap,
+#                  sets DPDK options, and creates bridges (all via --no-wait).
+#   ovs-vswitchd — waits for ovsdb-ready sentinel, starts ovs-vswitchd, and
+#                  blocks.  The sentinel ensures DPDK options and bridges are
+#                  written to OVSDB before vswitchd reads them.
+#
+# Configuration is read from the ConfigMap "ovs-config" (mounted at
+# /etc/ovs-config).  Two variables are supported:
+#
+#   HUGEPAGES      — "true" or "false" (default "false").
+#                    When false, --no-huge is added to the DPDK EAL args.
+#   INIT_BRIDGES   — comma-separated list of bridges to create
+#                    (e.g. "br-dpdk0,br-dpdk1").
+#
+# The script first looks for a node-specific key (<nodeName>_<VAR>), then
+# falls back to a global key (<VAR>), then to a hardcoded default.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ovs
+  namespace: dra-driver-ovsdpdk
+spec:
+  selector:
+    matchLabels:
+      app: ovs
+  template:
+    metadata:
+      labels:
+        app: ovs
+    spec:
+      # Avoid scheduling on control-plane nodes.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+      # OVS needs to manipulate kernel networking objects; privileged is the
+      # simplest way to grant the required capabilities inside Kind.
+      containers:
+        - name: ovsdb
+          image: OVS_IMAGE_PLACEHOLDER
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+
+              rm -f /var/run/openvswitch/ovsdb-ready
+
+              # --- Read config (node-specific → global → default) ---
+              cfg_read() {
+                local var="$1" default="$2"
+                cat "/etc/ovs-config/${NODE_NAME}_${var}" 2>/dev/null \
+                  || cat "/etc/ovs-config/${var}" 2>/dev/null \
+                  || echo "$default"
+              }
+              HUGEPAGES=$(cfg_read HUGEPAGES false)
+              INIT_BRIDGES=$(cfg_read INIT_BRIDGES "")
+
+              # Initialise the OVSDB schema file if not already present.
+              if [ ! -f /etc/openvswitch/conf.db ]; then
+                ovsdb-tool create /etc/openvswitch/conf.db \
+                  /usr/share/openvswitch/vswitch.ovsschema
+              fi
+
+              ovsdb-server \
+                --remote=punix:/var/run/openvswitch/db.sock \
+                --remote=db:Open_vSwitch,Open_vSwitch,manager_options \
+                --pidfile=/var/run/openvswitch/ovsdb-server.pid \
+                --log-file=/dev/stderr \
+                --no-chdir \
+                /etc/openvswitch/conf.db &
+              OVSDB_PID=$!
+ 
+              # Wait until ovsdb is up and configure OVS
+              until ovs-vsctl --no-wait show > /dev/null 2>&1; do sleep 0.2; done
+
+              DPDK_EXTRA="--no-pci --log-level lib.eal:debug --legacy-mem"
+              if [ "$HUGEPAGES" != "true" ]; then
+                DPDK_EXTRA="--no-huge $DPDK_EXTRA"
+              fi
+
+              ovs-vsctl --no-wait set Open_vSwitch . \
+                other_config:dpdk-init=true \
+                "other_config:dpdk-extra=$DPDK_EXTRA"
+
+              IFS=',' read -ra BRIDGES <<< "$INIT_BRIDGES"
+              for br in "${BRIDGES[@]}"; do
+                br=$(echo "$br" | tr -d ' ')
+                [ -z "$br" ] && continue
+                ovs-vsctl --no-wait --may-exist add-br "$br" \
+                  -- set bridge "$br" datapath_type=netdev
+              done
+
+              echo "ovsdb: config ready (hugepages=$HUGEPAGES, bridges=$INIT_BRIDGES)"
+
+              # Signal ovs-vswitchd that the DB is fully configured.
+              touch /var/run/openvswitch/ovsdb-ready
+
+              # Keep the container alive by waiting for ovsdb-server.
+              wait $OVSDB_PID
+          volumeMounts:
+            - name: ovs-run
+              mountPath: /var/run/openvswitch
+            - name: ovs-conf
+              mountPath: /etc/openvswitch
+            - name: ovs-config
+              mountPath: /etc/ovs-config
+              readOnly: true
+
+        - name: ovs-vswitchd
+          image: OVS_IMAGE_PLACEHOLDER
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+
+              # Wait for ovsdb container to finish all configuration
+              # (DPDK options, bridges).  It writes this sentinel after
+              # ovs-vsctl --no-wait calls are done.
+              until [ -f /var/run/openvswitch/ovsdb-ready ]; do sleep 0.2; done
+
+              echo "ovs-vswitchd: ovsdb ready, starting vswitchd"
+
+              ovs-vswitchd \
+                unix:/var/run/openvswitch/db.sock \
+                --pidfile=/var/run/openvswitch/ovs-vswitchd.pid \
+                --log-file=/dev/stderr \
+                --no-chdir &
+              VSWITCHD_PID=$!
+
+              wait $VSWITCHD_PID
+          volumeMounts:
+            - name: ovs-run
+              mountPath: /var/run/openvswitch
+            - name: ovs-conf
+              mountPath: /etc/openvswitch
+            - mountPath: /var/run/ovsdpdk
+              name: vhostuser
+
+      volumes:
+        # Bind-mount the host OVS run directory so that db.sock is visible on
+        # the host and therefore accessible to the DRA driver DaemonSet pod
+        # (which mounts the same path via its own hostPath volume).
+        - name: ovs-run
+          hostPath:
+            path: /var/run/openvswitch
+            type: DirectoryOrCreate
+        - name: vhostuser
+          hostPath:
+            path: /var/run/ovsdpdk
+            type: DirectoryOrCreate
+        # The OVSDB schema/conf.db lives in an emptyDir shared between the
+        # two containers; it does not need to persist across pod restarts.
+        - name: ovs-conf
+          emptyDir: {}
+        # ConfigMap with per-node and global OVS configuration.
+        - name: ovs-config
+          configMap:
+            name: ovs-config
