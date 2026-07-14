@@ -17,6 +17,7 @@
 package e2e_test
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -322,5 +323,146 @@ var _ = Describe("SELinux label CRD validation", func() {
 		manifest := mustRenderManifest("ovsdpdkconfig-test.yaml.tmpl",
 			ovsDpdkConfigData{"e2e-selinux-invalid-plain", "badlabel"})
 		Expect(tryApplyYAML(manifest)).To(HaveOccurred())
+	})
+})
+
+var _ = Describe("Single claim with multiple requests", func() {
+	const (
+		claimName = "e2e-multi-request"
+		podName   = "e2e-pod-multi-request"
+		bridge    = "br-dpdk0"
+		nPorts    = 2
+	)
+
+	portNames := func() []string {
+		p := make([]string, nPorts)
+		for i := range nPorts {
+			p[i] = fmt.Sprintf("port-%d", i)
+		}
+		return p
+	}()
+
+	var pod *corev1.Pod
+
+	BeforeEach(func(ctx SpecContext) {
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{"e2e-multi-req-policy", workers[0], []string{bridge}}))
+		waitForDeviceInSlice(ctx, workers[0], bridge)
+		applyAndCleanup(mustRenderManifest("claim-multi-request.yaml.tmpl",
+			multiRequestClaimData{claimName, testNamespace, bridge, portNames}))
+		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{podName, testNamespace, claimName}))
+		pod = waitForPodRunning(ctx, testNamespace, podName)
+	})
+
+	It("pod reaches Running", func(_ SpecContext) {
+		// Assertion is in BeforeEach.
+	})
+
+	It("all request socket directories are present on the host", func(ctx SpecContext) {
+		for _, reqName := range portNames {
+			socketDir := filepath.Join(hostSocketRoot, string(pod.UID)+"_"+claimName+"_"+reqName)
+			Eventually(func() bool { return dirExists(ctx, pod.Spec.NodeName, socketDir) }).
+				WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(BeTrue(),
+				"socket dir for request %s", reqName)
+		}
+	})
+
+	It("all request mounts are injected into the container", func(ctx SpecContext) {
+		for _, reqName := range portNames {
+			containerDir := filepath.Join(hostSocketRoot, claimName, reqName)
+			_, err := kubectlExec(ctx, testNamespace, podName, "consumer", "test", "-d", containerDir)
+			Expect(err).NotTo(HaveOccurred(), "container dir %s for request %s not found", containerDir, reqName)
+		}
+	})
+
+	It("all OVS ports exist tagged with the claim UID", func(ctx SpecContext) {
+		claim, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, claimName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		Eventually(func(g Gomega) {
+			p, err := ovsPortsForClaim(ctx, pod.Spec.NodeName, string(claim.UID))
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(len(p)).To(BeNumerically(">=", nPorts))
+		}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+	})
+
+	It("all socket dirs and OVS ports removed on pod deletion", func(ctx SpecContext) {
+		nodeName := pod.Spec.NodeName
+		claim, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, claimName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		deletePodAndWait(ctx, testNamespace, podName)
+
+		for _, reqName := range portNames {
+			socketDir := filepath.Join(hostSocketRoot, string(pod.UID)+"_"+claimName+"_"+reqName)
+			Eventually(func() bool { return dirExists(ctx, nodeName, socketDir) }).
+				WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(BeFalse())
+		}
+		Eventually(func(g Gomega) {
+			p, err := ovsPortsForClaim(ctx, nodeName, string(claim.UID))
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(p).To(BeEmpty())
+		}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+	})
+})
+
+var _ = Describe("Multiple ports from same bridge in one pod", func() {
+	const podName = "e2e-pod-multi-port"
+	claimNames := []string{"e2e-multi-port-0", "e2e-multi-port-1"}
+
+	var pod *corev1.Pod
+
+	BeforeEach(func(ctx SpecContext) {
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{"e2e-multi-port-policy", workers[0], []string{"br-dpdk0"}}))
+		waitForDeviceInSlice(ctx, workers[0], "br-dpdk0")
+		for _, name := range claimNames {
+			applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{name, testNamespace, "br-dpdk0"}))
+		}
+		applyAndCleanup(mustRenderManifest("pod-multi-claim.yaml.tmpl",
+			multiClaimPodData{podName, testNamespace, claimNames}))
+		pod = waitForPodRunning(ctx, testNamespace, podName)
+	})
+
+	It("both claims allocated and pod reaches Running", func(_ SpecContext) {
+		// Assertion is in BeforeEach.
+	})
+
+	It("each claim gets a distinct socket directory", func(ctx SpecContext) {
+		for _, name := range claimNames {
+			socketDir := filepath.Join(hostSocketRoot, string(pod.UID)+"_"+name+"_vhost-port")
+			Eventually(func() bool { return dirExists(ctx, pod.Spec.NodeName, socketDir) }).
+				WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(BeTrue(),
+				"socket dir for claim %s", name)
+		}
+	})
+
+	It("each claim has status data with its own claim name", func(ctx SpecContext) {
+		for _, name := range claimNames {
+			Eventually(func(g Gomega) {
+				c, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, name, metav1.GetOptions{})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(c.Status.Devices).NotTo(BeEmpty())
+				g.Expect(c.Status.Devices[0].Data).NotTo(BeNil())
+				g.Expect(string(c.Status.Devices[0].Data.Raw)).To(ContainSubstring(name))
+			}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+		}
+	})
+
+	It("both socket directories removed on pod deletion", func(ctx SpecContext) {
+		nodeName := pod.Spec.NodeName
+		var socketDirs []string
+		for _, name := range claimNames {
+			sd := filepath.Join(hostSocketRoot, string(pod.UID)+"_"+name+"_vhost-port")
+			Eventually(func() bool { return dirExists(ctx, nodeName, sd) }).
+				WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(BeTrue())
+			socketDirs = append(socketDirs, sd)
+		}
+
+		deletePodAndWait(ctx, testNamespace, podName)
+		for _, sd := range socketDirs {
+			Eventually(func() bool { return dirExists(ctx, nodeName, sd) }).
+				WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(BeFalse())
+		}
 	})
 })
