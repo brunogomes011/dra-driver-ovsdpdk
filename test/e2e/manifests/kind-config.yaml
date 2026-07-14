@@ -12,25 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ARG GOLANG_VERSION=1.26
-FROM golang:${GOLANG_VERSION} AS builder
-
-WORKDIR /build
-
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY --exclude=test . .
-
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -ldflags="-s -w" \
-    -o /dra-driver-ovsdpdk \
-    ./cmd/dra-driver-ovsdpdk/
-
-FROM quay.io/centos/centos:stream9 AS runtime
-
-RUN dnf install -y util-linux-core acl && dnf clean all
-
-COPY --from=builder /dra-driver-ovsdpdk /usr/bin/dra-driver-ovsdpdk
-
-ENTRYPOINT ["/usr/bin/dra-driver-ovsdpdk"]
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+featureGates:
+  DynamicResourceAllocation: true
+  DRAConsumableCapacity: true
+  DRAResourceClaimDeviceStatus: true
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker

@@ -12,25 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ARG GOLANG_VERSION=1.26
-FROM golang:${GOLANG_VERSION} AS builder
+# OVS/OVS-DPDK test image based on Fedora latest.
+# Used by the e2e test suite to provide a real OVSDB + ovs-vswitchd
+# (in DPDK mode with --no-pci --no-huge) inside the Kind cluster.
+FROM fedora:latest
 
-WORKDIR /build
+RUN dnf install -y \
+        openvswitch \
+        openvswitch-dpdk \
+    && dnf clean all
 
-COPY go.mod go.sum ./
-RUN go mod download
+# Ensure runtime directories exist in the image layer so the container
+# can start without needing to create them (hostPath mounts may be read-only
+# at the directory level on some container runtimes).
+RUN mkdir -p /run/openvswitch /etc/openvswitch
 
-COPY --exclude=test . .
-
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -ldflags="-s -w" \
-    -o /dra-driver-ovsdpdk \
-    ./cmd/dra-driver-ovsdpdk/
-
-FROM quay.io/centos/centos:stream9 AS runtime
-
-RUN dnf install -y util-linux-core acl && dnf clean all
-
-COPY --from=builder /dra-driver-ovsdpdk /usr/bin/dra-driver-ovsdpdk
-
-ENTRYPOINT ["/usr/bin/dra-driver-ovsdpdk"]
+ENTRYPOINT ["/bin/bash"]
