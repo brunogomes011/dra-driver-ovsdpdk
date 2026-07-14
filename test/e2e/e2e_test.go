@@ -18,6 +18,7 @@ package e2e_test
 
 import (
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -189,5 +190,137 @@ var _ = Describe("Claim status", func() {
 		Expect(data).To(SatisfyAny(ContainSubstring("hostPath"), ContainSubstring("hostDir")))
 		Expect(data).To(SatisfyAny(ContainSubstring("containerPath"), ContainSubstring("containerDir")))
 		Expect(data).To(ContainSubstring("bridgeName"))
+	})
+})
+
+var _ = Describe("Vhost-user port lifecycle", func() {
+	const (
+		claimName = "e2e-vhost-port"
+		podName   = "e2e-pod-vhost-port"
+		bridge    = "br-dpdk0"
+	)
+
+	var pod *corev1.Pod
+	var ports []string
+	var uid string
+
+	BeforeEach(func(ctx SpecContext) {
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{"e2e-vhost-policy", workers[0], []string{bridge}}))
+		waitForDeviceInSlice(ctx, workers[0], bridge)
+		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{claimName, testNamespace, bridge}))
+		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{podName, testNamespace, claimName}))
+		pod = waitForPodRunning(ctx, testNamespace, podName)
+
+		c, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, claimName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		uid = string(c.UID)
+
+		Eventually(func(g Gomega) {
+			p, err := ovsPortsForClaim(ctx, pod.Spec.NodeName, uid)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(p).NotTo(BeEmpty())
+			ports = p
+		}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+	})
+
+	It("OVS port exists after pod is running", func(_ SpecContext) {
+		Expect(ports).NotTo(BeEmpty())
+	})
+
+	It("OVS port is on the correct bridge", func(ctx SpecContext) {
+		got, err := ovsPodExec(ctx, pod.Spec.NodeName, "ovs-vsctl", "port-to-br", ports[0])
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(bridge))
+	})
+
+	It("interface type is dpdkvhostuserclient", func(ctx SpecContext) {
+		got, err := ovsPodExec(ctx, pod.Spec.NodeName, "ovs-vsctl", "get", "interface", ports[0], "type")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal("dpdkvhostuserclient"))
+	})
+
+	It("vhost-server-path matches the socket path", func(ctx SpecContext) {
+		got, err := ovsPodExec(ctx, pod.Spec.NodeName,
+			"ovs-vsctl", "get", "interface", ports[0], "options:vhost-server-path")
+		Expect(err).NotTo(HaveOccurred())
+		wantDir := filepath.Join(hostSocketRoot, string(pod.UID)+"_"+claimName+"_vhost-port")
+		Expect(strings.Trim(got, `"`)).To(Equal(filepath.Join(wantDir, "vhost.sock")))
+	})
+
+	It("OVS port is removed after pod deletion", func(ctx SpecContext) {
+		nodeName := pod.Spec.NodeName
+		deletePodAndWait(ctx, testNamespace, podName)
+		Eventually(func(g Gomega) {
+			p, err := ovsPortsForClaim(ctx, nodeName, uid)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(p).To(BeEmpty())
+		}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+	})
+
+	It("two claims on the same bridge get distinct ports", func(ctx SpecContext) {
+		const (
+			claim0 = "e2e-vhost-multi-0"
+			claim1 = "e2e-vhost-multi-1"
+			pod0   = "e2e-pod-vhost-multi-0"
+			pod1   = "e2e-pod-vhost-multi-1"
+		)
+		for _, name := range []string{claim0, claim1} {
+			applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{name, testNamespace, bridge}))
+		}
+		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{pod0, testNamespace, claim0}))
+		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{pod1, testNamespace, claim1}))
+
+		runPod0 := waitForPodRunning(ctx, testNamespace, pod0)
+		runPod1 := waitForPodRunning(ctx, testNamespace, pod1)
+
+		rc0, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, claim0, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		rc1, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, claim1, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		var ports0, ports1 []string
+		Eventually(func(g Gomega) {
+			p, err := ovsPortsForClaim(ctx, runPod0.Spec.NodeName, string(rc0.UID))
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(p).NotTo(BeEmpty())
+			ports0 = p
+		}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+		Eventually(func(g Gomega) {
+			p, err := ovsPortsForClaim(ctx, runPod1.Spec.NodeName, string(rc1.UID))
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(p).NotTo(BeEmpty())
+			ports1 = p
+		}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+
+		if runPod0.Spec.NodeName == runPod1.Spec.NodeName {
+			Expect(ports0[0]).NotTo(Equal(ports1[0]), "two claims got the same OVS port name")
+		}
+	})
+})
+
+var _ = Describe("SELinux label CRD validation", func() {
+	It("valid label is accepted by the API server", func(_ SpecContext) {
+		manifest := mustRenderManifest("ovsdpdkconfig-test.yaml.tmpl",
+			ovsDpdkConfigData{"e2e-selinux-valid", "system_u:object_r:container_file_t:s0"})
+		applyAndCleanup(manifest)
+	})
+
+	It("label missing a component is rejected", func(_ SpecContext) {
+		manifest := mustRenderManifest("ovsdpdkconfig-test.yaml.tmpl",
+			ovsDpdkConfigData{"e2e-selinux-invalid-short", "system_u:object_r:container_file_t"})
+		Expect(tryApplyYAML(manifest)).To(HaveOccurred())
+	})
+
+	It("label with an empty component is rejected", func(_ SpecContext) {
+		manifest := mustRenderManifest("ovsdpdkconfig-test.yaml.tmpl",
+			ovsDpdkConfigData{"e2e-selinux-invalid-empty", "system_u::container_file_t:s0"})
+		Expect(tryApplyYAML(manifest)).To(HaveOccurred())
+	})
+
+	It("label with no colons is rejected", func(_ SpecContext) {
+		manifest := mustRenderManifest("ovsdpdkconfig-test.yaml.tmpl",
+			ovsDpdkConfigData{"e2e-selinux-invalid-plain", "badlabel"})
+		Expect(tryApplyYAML(manifest)).To(HaveOccurred())
 	})
 })
