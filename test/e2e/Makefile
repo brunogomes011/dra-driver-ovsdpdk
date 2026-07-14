@@ -31,7 +31,34 @@ OVS_IMAGE ?= $(REGISTRY)/ovs-dpdk-test:latest
 MANIFESTS := $(CURDIR)/manifests
 REPO_ROOT := $(CURDIR)/../..
 
-.PHONY: test build-ovs-image deploy-ovs cluster-up cluster-down
+# --- kubevirtci configuration -----------------------------------------------
+#
+# kubevirtci uses rootful podman to run virtualised cluster nodes.
+# All KUBEVIRT_* variables can be overridden from the environment.
+
+KUBEVIRTCI_PATH        := $(CURDIR)/kubevirtci/cluster-up/
+KUBEVIRTCI_CONFIG_PATH := $(CURDIR)/_ci-configs
+KUBEVIRT_PROVIDER      ?= k8s-1.36
+KUBEVIRT_MEMORY_SIZE   ?= 8192M
+KUBEVIRT_HUGEPAGES_2M  ?= 1024
+
+# Environment passed to kubevirtci scripts.  Defined once, used by every
+# kubevirtci target via: $(KUBEVIRTCI_ENV) && <command>
+define KUBEVIRTCI_ENV
+export KUBEVIRTCI_CONFIG_PATH=$(KUBEVIRTCI_CONFIG_PATH) \
+       KUBEVIRTCI_TAG=2607152244-62c3ca1a \
+       KUBEVIRT_PROVIDER=$(KUBEVIRT_PROVIDER) \
+       KUBEVIRT_NUM_NODES=2 \
+       KUBEVIRT_NUM_NUMA_NODES=2 \
+       KUBEVIRT_NUM_SECONDARY_NICS=2 \
+       KUBEVIRT_MEMORY_SIZE=$(KUBEVIRT_MEMORY_SIZE) \
+       KUBEVIRT_HUGEPAGES_2M=$(KUBEVIRT_HUGEPAGES_2M) \
+       CONTAINER_HOST=unix:///run/podman/podman.sock
+endef
+
+.PHONY: test build-ovs-image deploy-ovs \
+	cluster-up cluster-down cluster-kubeconfig podman-check \
+	cluster-up-kind cluster-down-kind
 
 # --- Test -------------------------------------------------------------------
 
@@ -64,22 +91,46 @@ deploy-ovs:
 			$(MANIFESTS)/ovs-daemonset-hugepages.json; \
 	fi
 
-# --- Kind cluster (optional) -----------------------------------------------
-#
-# Convenience targets for local development with kind.
+# --- kubevirtci cluster -----------------------------------------------------
 #
 # Full workflow:
-#   make cluster-up                          # create cluster, build+load images
+#   make cluster-up                          # create kubevirtci cluster
+#   make deploy-ovs                          # deploy containerised OVS
+#   make -C ../.. deploy                     # deploy the driver
+#   export KUBECONFIG=$$(make cluster-kubeconfig)
+#   make test                                # run e2e tests
+#   make cluster-down                        # tear down
+
+podman-check:
+	@podman --remote info >/dev/null 2>&1 \
+		|| (echo "ERROR: rootful podman is not reachable." >&2; \
+		    echo "" >&2; \
+		    echo "kubevirtci requires rootful podman with a listening socket." >&2; \
+		    echo "See: https://github.com/kubevirt/kubevirtci/blob/main/PODMAN.md" >&2; \
+		    echo "" >&2; \
+		    exit 1)
+
+cluster-up: podman-check
+	$(KUBEVIRTCI_ENV) && $(KUBEVIRTCI_PATH)up.sh
+
+cluster-down: podman-check
+	$(KUBEVIRTCI_ENV) && $(KUBEVIRTCI_PATH)down.sh
+
+cluster-kubeconfig:
+	@echo $(KUBEVIRTCI_CONFIG_PATH)/$(KUBEVIRT_PROVIDER)/.kubeconfig
+
+# --- Kind cluster -----------------------------------------------------------
+#
+# Lightweight alternative using kind (no hugepages / NUMA simulation).
+#
+# Full workflow:
+#   make cluster-up-kind                     # create cluster, build+load images
 #   make deploy-ovs                          # deploy containerised OVS
 #   make -C ../.. deploy                     # deploy the driver
 #   make test                                # run e2e tests
-#   make cluster-down                        # tear down
-#
-# Or as a one-liner:
-#   make cluster-up deploy-ovs && make -C ../.. deploy && make test
+#   make cluster-down-kind                   # tear down
 
-# Create a kind cluster with DRA feature gates and 2 workers, build and load images.
-cluster-up: build-ovs-image
+cluster-up-kind: build-ovs-image
 	$(MAKE) -C $(REPO_ROOT) build-image CONTAINER_TOOL=docker
 	kind create cluster \
 		--name $(E2E_CLUSTER) \
@@ -87,6 +138,5 @@ cluster-up: build-ovs-image
 	kind load docker-image $(E2E_IMAGE) --name $(E2E_CLUSTER)
 	kind load docker-image $(OVS_IMAGE) --name $(E2E_CLUSTER)
 
-# Destroy the kind cluster.
-cluster-down:
+cluster-down-kind:
 	kind delete cluster --name $(E2E_CLUSTER)
