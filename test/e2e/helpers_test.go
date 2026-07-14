@@ -67,6 +67,10 @@ type podData struct {
 	Name, Namespace, ClaimName string
 }
 
+type ovsDpdkConfigData struct {
+	Name, SelinuxLabel string
+}
+
 type policyData struct {
 	Name, NodeName string
 	Bridges        []string
@@ -100,6 +104,19 @@ func applyYAML(manifest string) {
 func deleteYAML(manifest string) {
 	GinkgoHelper()
 	runKubectlStdin(manifest, "delete", "--ignore-not-found", "--timeout=30s", "-f", "-")
+}
+
+// tryApplyYAML applies a rendered YAML string and returns an error instead of
+// failing the test.  Use for tests that expect the API server to reject input.
+func tryApplyYAML(manifest string) error {
+	allArgs := []string{"--kubeconfig", kubeconfig, "apply", "-f", "-"}
+	cmd := exec.Command("kubectl", allArgs...)
+	cmd.Stdin = strings.NewReader(manifest)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
 }
 
 // applyAndCleanup applies a rendered YAML string and registers DeferCleanup
@@ -169,6 +186,44 @@ func driverPodOnNode(ctx context.Context, nodeName string) (string, error) {
 		return "", fmt.Errorf("no driver pod found on node %s", nodeName)
 	}
 	return pods.Items[0].Name, nil
+}
+
+// ovsPodExec runs a command inside the ovs-vswitchd container of the OVS pod
+// on nodeName.
+func ovsPodExec(ctx context.Context, nodeName string, args ...string) (string, error) {
+	pods, err := cs.CoreV1().Pods(driverNamespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=ovs",
+		FieldSelector: "spec.nodeName=" + nodeName,
+	})
+	if err != nil {
+		return "", fmt.Errorf("find OVS pod on %s: %w", nodeName, err)
+	}
+	if len(pods.Items) == 0 {
+		return "", fmt.Errorf("no OVS pod on node %s", nodeName)
+	}
+	return kubectlExec(ctx, driverNamespace, pods.Items[0].Name, "ovs-vswitchd", args...)
+}
+
+// --- OVS helpers ---
+
+func ovsPortsForClaim(ctx context.Context, nodeName, claimUID string) ([]string, error) {
+	out, err := ovsPodExec(ctx, nodeName,
+		"ovs-vsctl", "--columns=name", "--bare",
+		"find", "port", "external_ids:claim-uid="+claimUID)
+	if err != nil {
+		return nil, err
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return nil, nil
+	}
+	var ports []string
+	for _, line := range strings.Split(out, "\n") {
+		if name := strings.TrimSpace(line); name != "" {
+			ports = append(ports, name)
+		}
+	}
+	return ports, nil
 }
 
 // --- Host filesystem helpers (via driver pod) ---
