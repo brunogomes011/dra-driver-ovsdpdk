@@ -67,6 +67,10 @@ var (
 
 	// workers holds the names of worker nodes, discovered in BeforeSuite.
 	workers []string
+
+	// topologyPCI is the PCI address of a virtio NIC on worker1 used for
+	// topology/Device Plugin tests.  When non-empty, topology tests run.
+	topologyPCI = os.Getenv("TOPOLOGY_PCI")
 )
 
 func TestE2E(t *testing.T) {

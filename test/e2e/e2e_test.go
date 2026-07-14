@@ -17,6 +17,7 @@
 package e2e_test
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -464,5 +465,176 @@ var _ = Describe("Multiple ports from same bridge in one pod", func() {
 			Eventually(func() bool { return dirExists(ctx, nodeName, sd) }).
 				WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(BeFalse())
 		}
+	})
+})
+
+var _ = Describe("Bridge hot-plug", func() {
+	const (
+		bridge     = "br-hotplug"
+		policyName = "e2e-hotplug-policy"
+		claimName  = "e2e-hotplug-claim"
+		podName    = "e2e-hotplug-pod"
+	)
+
+	It("bridge absent from ResourceSlice before OVS bridge is created", func(ctx SpecContext) {
+		nodeName := workers[0]
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{policyName, nodeName, []string{bridge}}))
+
+		nodeSlices, err := resourceSlicesForNode(ctx, nodeName)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(deviceNamesFromSlices(nodeSlices)).NotTo(ContainElement(bridge))
+	})
+
+	It("bridge appears in ResourceSlice after OVS bridge is created", func(ctx SpecContext) {
+		nodeName := workers[0]
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{policyName, nodeName, []string{bridge}}))
+
+		addBridgeToOVS(ctx, nodeName, bridge)
+		DeferCleanup(deleteBridgeFromOVS, context.Background(), nodeName, bridge)
+
+		Eventually(func(g Gomega) {
+			nodeSlices, err := resourceSlicesForNode(ctx, nodeName)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(deviceNamesFromSlices(nodeSlices)).To(ContainElement(bridge))
+		}).WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+	})
+
+	It("pod can be scheduled after bridge is created", func(ctx SpecContext) {
+		nodeName := workers[0]
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{policyName, nodeName, []string{bridge}}))
+
+		addBridgeToOVS(ctx, nodeName, bridge)
+		DeferCleanup(deleteBridgeFromOVS, context.Background(), nodeName, bridge)
+
+		Eventually(func(g Gomega) {
+			nodeSlices, err := resourceSlicesForNode(ctx, nodeName)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(deviceNamesFromSlices(nodeSlices)).To(ContainElement(bridge))
+		}).WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+
+		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{claimName, testNamespace, bridge}))
+		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{podName, testNamespace, claimName}))
+		waitForPodRunning(ctx, testNamespace, podName)
+	})
+
+	It("bridge disappears from ResourceSlice after OVS bridge is deleted", func(ctx SpecContext) {
+		nodeName := workers[0]
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{policyName, nodeName, []string{bridge}}))
+
+		addBridgeToOVS(ctx, nodeName, bridge)
+		Eventually(func(g Gomega) {
+			nodeSlices, err := resourceSlicesForNode(ctx, nodeName)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(deviceNamesFromSlices(nodeSlices)).To(ContainElement(bridge))
+		}).WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+
+		deleteBridgeFromOVS(ctx, nodeName, bridge)
+		Eventually(func(g Gomega) {
+			nodeSlices, err := resourceSlicesForNode(ctx, nodeName)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(deviceNamesFromSlices(nodeSlices)).NotTo(ContainElement(bridge))
+		}).WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+	})
+})
+
+var _ = Describe("Topology Device Plugin", func() {
+	const (
+		bridge           = "br-dpdk0"
+		dpdkPort         = "dpdk-topo0"
+		topologyResource = "ovsdpdk.k8snetworkplumbingwg.io/topology-br-dpdk0"
+		policyName       = "e2e-topology-policy"
+	)
+
+	BeforeEach(func() {
+		if topologyPCI == "" {
+			Skip("topology tests require TOPOLOGY_PCI env var")
+		}
+	})
+
+	It("no extended resource before DPDK interface exists", func(ctx SpecContext) {
+		nodeName := workers[0]
+		applyAndCleanup(mustRenderManifest("policy-topology.yaml.tmpl",
+			topologyPolicyData{policyName, nodeName, bridge, topologyResource}))
+
+		Consistently(func() int64 {
+			return nodeAllocatableQuantity(ctx, nodeName, topologyResource)
+		}).WithTimeout(10 * time.Second).WithPolling(2 * time.Second).Should(BeZero())
+	})
+
+	It("extended resource appears after adding DPDK interface", func(ctx SpecContext) {
+		nodeName := workers[0]
+		applyAndCleanup(mustRenderManifest("policy-topology.yaml.tmpl",
+			topologyPolicyData{policyName, nodeName, bridge, topologyResource}))
+
+		addDPDKPort(ctx, nodeName, bridge, dpdkPort, topologyPCI)
+		DeferCleanup(removeDPDKPort, context.Background(), nodeName, dpdkPort)
+
+		waitForNodeResource(ctx, nodeName, topologyResource)
+		Expect(nodeAllocatableQuantity(ctx, nodeName, topologyResource)).To(
+			BeNumerically("==", 1024), "DefaultTopologyDeviceCount")
+	})
+
+	It("extended resource disappears when DPDK interface is removed", func(ctx SpecContext) {
+		nodeName := workers[0]
+		applyAndCleanup(mustRenderManifest("policy-topology.yaml.tmpl",
+			topologyPolicyData{policyName, nodeName, bridge, topologyResource}))
+
+		addDPDKPort(ctx, nodeName, bridge, dpdkPort, topologyPCI)
+		waitForNodeResource(ctx, nodeName, topologyResource)
+
+		removeDPDKPort(ctx, nodeName, dpdkPort)
+		waitForNodeResourceGone(ctx, nodeName, topologyResource)
+	})
+
+	It("pod requesting topology resource and DRA claim gets scheduled", func(ctx SpecContext) {
+		const (
+			claimName = "e2e-topo-claim"
+			podName   = "e2e-topo-pod"
+		)
+		nodeName := workers[0]
+		applyAndCleanup(mustRenderManifest("policy-topology.yaml.tmpl",
+			topologyPolicyData{policyName, nodeName, bridge, topologyResource}))
+
+		addDPDKPort(ctx, nodeName, bridge, dpdkPort, topologyPCI)
+		DeferCleanup(removeDPDKPort, context.Background(), nodeName, dpdkPort)
+		waitForNodeResource(ctx, nodeName, topologyResource)
+
+		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{claimName, testNamespace, bridge}))
+		applyAndCleanup(mustRenderManifest("pod-topology.yaml.tmpl",
+			topologyPodData{podName, testNamespace, claimName, topologyResource}))
+
+		pod := waitForPodRunning(ctx, testNamespace, podName)
+		Expect(pod.Spec.NodeName).To(Equal(nodeName))
+	})
+
+	It("DPDK interface removed and re-added — DP recovers", func(ctx SpecContext) {
+		const (
+			claimName = "e2e-topo-recover-claim"
+			podName   = "e2e-topo-recover-pod"
+		)
+		nodeName := workers[0]
+		applyAndCleanup(mustRenderManifest("policy-topology.yaml.tmpl",
+			topologyPolicyData{policyName, nodeName, bridge, topologyResource}))
+
+		addDPDKPort(ctx, nodeName, bridge, dpdkPort, topologyPCI)
+		waitForNodeResource(ctx, nodeName, topologyResource)
+
+		removeDPDKPort(ctx, nodeName, dpdkPort)
+		waitForNodeResourceGone(ctx, nodeName, topologyResource)
+
+		addDPDKPort(ctx, nodeName, bridge, dpdkPort, topologyPCI)
+		DeferCleanup(removeDPDKPort, context.Background(), nodeName, dpdkPort)
+		waitForNodeResource(ctx, nodeName, topologyResource)
+
+		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{claimName, testNamespace, bridge}))
+		applyAndCleanup(mustRenderManifest("pod-topology.yaml.tmpl",
+			topologyPodData{podName, testNamespace, claimName, topologyResource}))
+
+		pod := waitForPodRunning(ctx, testNamespace, podName)
+		Expect(pod.Spec.NodeName).To(Equal(nodeName))
 	})
 })

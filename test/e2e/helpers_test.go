@@ -30,6 +30,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -84,6 +85,14 @@ type multiRequestClaimData struct {
 type policyData struct {
 	Name, NodeName string
 	Bridges        []string
+}
+
+type topologyPolicyData struct {
+	Name, NodeName, BridgeName, TopologyResource string
+}
+
+type topologyPodData struct {
+	Name, Namespace, ClaimName, TopologyResource string
 }
 
 // --- kubectl manifest apply/delete ---
@@ -236,6 +245,19 @@ func ovsPortsForClaim(ctx context.Context, nodeName, claimUID string) ([]string,
 	return ports, nil
 }
 
+func addBridgeToOVS(ctx context.Context, nodeName, bridgeName string) {
+	GinkgoHelper()
+	_, err := ovsPodExec(ctx, nodeName,
+		"ovs-vsctl", "--may-exist", "add-br", bridgeName,
+		"--", "set", "bridge", bridgeName, "datapath_type=netdev")
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "add bridge %s", bridgeName)
+}
+
+func deleteBridgeFromOVS(ctx context.Context, nodeName, bridgeName string) {
+	_, _ = ovsPodExec(ctx, nodeName,
+		"ovs-vsctl", "--if-exists", "del-br", bridgeName)
+}
+
 // --- Host filesystem helpers (via driver pod) ---
 
 func dirExists(ctx context.Context, nodeName, path string) bool {
@@ -312,6 +334,56 @@ func deletePodAndWait(ctx context.Context, namespace, name string) {
 		}
 		g.Expect(err).To(HaveOccurred(), "pod %s still exists (phase=%s)", name, p.Status.Phase)
 	}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+}
+
+// --- Topology / Device Plugin helpers ---
+
+func addDPDKPort(ctx context.Context, nodeName, bridge, portName, pciAddr string) {
+	GinkgoHelper()
+	_, err := ovsPodExec(ctx, nodeName,
+		"ovs-vsctl", "add-port", bridge, portName,
+		"--", "set", "interface", portName,
+		"type=dpdk", "options:dpdk-devargs="+pciAddr)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "add DPDK port %s", portName)
+}
+
+func removeDPDKPort(ctx context.Context, nodeName, portName string) {
+	_, _ = ovsPodExec(ctx, nodeName,
+		"ovs-vsctl", "--if-exists", "del-port", portName)
+}
+
+func nodeAllocatableQuantity(ctx context.Context, nodeName, resourceName string) int64 {
+	GinkgoHelper()
+	node, err := cs.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	qty, ok := node.Status.Allocatable[corev1.ResourceName(resourceName)]
+	if !ok {
+		return 0
+	}
+	return qty.Value()
+}
+
+func waitForNodeResource(ctx context.Context, nodeName, resourceName string) {
+	GinkgoHelper()
+	resName := corev1.ResourceName(resourceName)
+	EventuallyWithOffset(1, func(g Gomega) {
+		node, err := cs.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+		g.Expect(err).NotTo(HaveOccurred())
+		qty, ok := node.Status.Allocatable[resName]
+		g.Expect(ok).To(BeTrue(), "resource %s not in allocatable", resourceName)
+		g.Expect(qty.Cmp(resource.MustParse("0"))).To(BeNumerically(">", 0))
+	}).WithTimeout(90 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+}
+
+func waitForNodeResourceGone(ctx context.Context, nodeName, resourceName string) {
+	GinkgoHelper()
+	resName := corev1.ResourceName(resourceName)
+	EventuallyWithOffset(1, func(g Gomega) {
+		node, err := cs.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+		g.Expect(err).NotTo(HaveOccurred())
+		_, ok := node.Status.Allocatable[resName]
+		g.Expect(ok).To(BeFalse(), "resource %s still in allocatable", resourceName)
+	}).WithTimeout(90 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
 }
 
 // waitForDeviceInSlice polls until the named device appears in the
