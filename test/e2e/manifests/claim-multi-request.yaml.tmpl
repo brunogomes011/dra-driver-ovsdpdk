@@ -1,0 +1,16 @@
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace }}
+spec:
+  devices:
+    requests:
+{{- range .Ports }}
+      - name: {{ . }}
+        exactly:
+          deviceClassName: ovsdpdk
+          selectors:
+            - cel:
+                expression: 'device.attributes["ovsdpdk.k8snetworkplumbingwg.io"].bridgeName == "{{ $.BridgeName }}"'
+{{- end }}

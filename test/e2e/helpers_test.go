@@ -71,6 +71,16 @@ type ovsDpdkConfigData struct {
 	Name, SelinuxLabel string
 }
 
+type multiClaimPodData struct {
+	Name, Namespace string
+	ClaimNames      []string
+}
+
+type multiRequestClaimData struct {
+	Name, Namespace, BridgeName string
+	Ports                       []string
+}
+
 type policyData struct {
 	Name, NodeName string
 	Bridges        []string
