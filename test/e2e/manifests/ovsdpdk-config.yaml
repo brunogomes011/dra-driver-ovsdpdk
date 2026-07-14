@@ -1,0 +1,14 @@
+# Global OvsDpdkConfig for the e2e cluster.  The driver watches the object
+# named "default" (the --config-name flag default) and applies its vhostUser
+# settings to every node.
+apiVersion: ovsdpdk.k8snetworkplumbingwg.io/v1alpha1
+kind: OvsDpdkConfig
+metadata:
+  name: default
+spec:
+  vhostUser:
+    containerRootPath: /var/run/ovsdpdk
+    user: 1001
+    group: 107
+    aclUsers:
+      - "1001"
