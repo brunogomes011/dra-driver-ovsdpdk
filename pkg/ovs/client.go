@@ -71,6 +71,10 @@ type OvsPortParams struct {
 	ExternalIDs map[string]string
 	// Vlan, when non-nil, sets the 802.1Q access VLAN tag on the port.
 	Vlan *int
+	// IngressRate sets ingress_policing_rate (kbps) on the Interface; 0 means unlimited.
+	IngressRate int
+	// IngressBurst sets ingress_policing_burst (kb) on the Interface; 0 means OVS default.
+	IngressBurst int
 }
 
 // OVSClient wraps the libovsdb client for interacting with OVSDB.
@@ -373,10 +377,12 @@ func (c *OVSClient) BridgeExists(name string) (bool, error) {
 // CreatePort creates a dpdkvhostuserclient OVS port and its associated Interface.
 func (c *OVSClient) CreatePort(ctx context.Context, bridgeName, portName, socketPath string, params *OvsPortParams) error {
 	iface := &Interface{
-		UUID:    "newiface",
-		Name:    portName,
-		Type:    "dpdkvhostuserclient",
-		Options: map[string]string{"vhost-server-path": socketPath},
+		UUID:                 "newiface",
+		Name:                 portName,
+		Type:                 "dpdkvhostuserclient",
+		Options:              map[string]string{"vhost-server-path": socketPath},
+		IngressPolicingRate:  params.IngressRate,
+		IngressPolicingBurst: params.IngressBurst,
 	}
 	ifaceOps, err := c.client.Create(iface)
 	if err != nil {
