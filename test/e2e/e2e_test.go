@@ -363,7 +363,7 @@ var _ = Describe("Single claim with multiple requests", func() {
 		for _, reqName := range portNames {
 			socketDir := filepath.Join(hostSocketRoot, string(pod.UID)+"_"+claimName+"_"+reqName)
 			Eventually(func() bool { return dirExists(ctx, pod.Spec.NodeName, socketDir) }).
-				WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(BeTrue(),
+				WithTimeout(60*time.Second).WithPolling(3*time.Second).Should(BeTrue(),
 				"socket dir for request %s", reqName)
 		}
 	})
@@ -433,7 +433,7 @@ var _ = Describe("Multiple ports from same bridge in one pod", func() {
 		for _, name := range claimNames {
 			socketDir := filepath.Join(hostSocketRoot, string(pod.UID)+"_"+name+"_vhost-port")
 			Eventually(func() bool { return dirExists(ctx, pod.Spec.NodeName, socketDir) }).
-				WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(BeTrue(),
+				WithTimeout(60*time.Second).WithPolling(3*time.Second).Should(BeTrue(),
 				"socket dir for claim %s", name)
 		}
 	})
@@ -636,5 +636,102 @@ var _ = Describe("Topology Device Plugin", func() {
 
 		pod := waitForPodRunning(ctx, testNamespace, podName)
 		Expect(pod.Spec.NodeName).To(Equal(nodeName))
+	})
+})
+
+var _ = Describe("Ingress policing", Ordered, func() {
+	const (
+		claimName = "e2e-policing"
+		podName   = "e2e-pod-policing"
+		bridge    = "br-dpdk0"
+	)
+
+	var pod *corev1.Pod
+	var ports []string
+	var claimUID string
+
+	BeforeAll(func(ctx SpecContext) {
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{"e2e-policing-policy", workers[0], []string{bridge}}))
+		waitForDeviceInSlice(ctx, workers[0], bridge)
+		applyAndCleanup(mustRenderManifest("claim-with-policing.yaml.tmpl",
+			policingClaimData{
+				Name:       claimName,
+				Namespace:  testNamespace,
+				BridgeName: bridge,
+				MaxRate:    100000, // 100 Mbps in kbps
+				Burst:      10000,  // 10 Mb in kb
+			}))
+		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{podName, testNamespace, claimName}))
+		pod = waitForPodRunning(ctx, testNamespace, podName)
+
+		c, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, claimName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		claimUID = string(c.UID)
+
+		Eventually(func(g Gomega) {
+			p, err := ovsPortsForClaim(ctx, pod.Spec.NodeName, claimUID)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(p).NotTo(BeEmpty())
+			ports = p
+		}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+	})
+
+	It("ingress_policing_rate is set on the OVS interface", func(ctx SpecContext) {
+		got, err := ovsInterfaceGet(ctx, pod.Spec.NodeName, ports[0], "ingress_policing_rate")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal("100000"))
+	})
+
+	It("ingress_policing_burst is set on the OVS interface", func(ctx SpecContext) {
+		got, err := ovsInterfaceGet(ctx, pod.Spec.NodeName, ports[0], "ingress_policing_burst")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal("10000"))
+	})
+
+	It("policing config is reflected in ResourceClaim status data", func(ctx SpecContext) {
+		Eventually(func(g Gomega) {
+			c, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, claimName, metav1.GetOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(c.Status.Devices).NotTo(BeEmpty())
+			g.Expect(c.Status.Devices[0].Data).NotTo(BeNil())
+			data := string(c.Status.Devices[0].Data.Raw)
+			g.Expect(data).To(ContainSubstring(`"policing"`))
+			g.Expect(data).To(ContainSubstring(`"max_rate":100000`))
+			g.Expect(data).To(ContainSubstring(`"burst":10000`))
+		}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+	})
+})
+
+var _ = Describe("Ingress policing absent", func() {
+	It("policing is absent from OVS interface when not configured", func(ctx SpecContext) {
+		const (
+			plainClaimName = "e2e-policing-absent"
+			plainPodName   = "e2e-pod-policing-absent"
+			bridge         = "br-dpdk0"
+		)
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{"e2e-policing-absent-policy", workers[0], []string{bridge}}))
+		waitForDeviceInSlice(ctx, workers[0], bridge)
+		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl",
+			claimData{plainClaimName, testNamespace, bridge}))
+		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl",
+			podData{plainPodName, testNamespace, plainClaimName}))
+		plainPod := waitForPodRunning(ctx, testNamespace, plainPodName)
+
+		c, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, plainClaimName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		var plainPorts []string
+		Eventually(func(g Gomega) {
+			p, err := ovsPortsForClaim(ctx, plainPod.Spec.NodeName, string(c.UID))
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(p).NotTo(BeEmpty())
+			plainPorts = p
+		}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+
+		got, err := ovsInterfaceGet(ctx, plainPod.Spec.NodeName, plainPorts[0], "ingress_policing_rate")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal("0"))
 	})
 })

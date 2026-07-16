@@ -82,6 +82,12 @@ type multiRequestClaimData struct {
 	Ports                       []string
 }
 
+type policingClaimData struct {
+	Name, Namespace, BridgeName string
+	MaxRate                     uint32
+	Burst                       uint32 // 0 means omit from manifest
+}
+
 type policyData struct {
 	Name, NodeName string
 	Bridges        []string
@@ -243,6 +249,11 @@ func ovsPortsForClaim(ctx context.Context, nodeName, claimUID string) ([]string,
 		}
 	}
 	return ports, nil
+}
+
+// ovsInterfaceGet returns the value of a single column on an OVS Interface row.
+func ovsInterfaceGet(ctx context.Context, nodeName, portName, column string) (string, error) {
+	return ovsPodExec(ctx, nodeName, "ovs-vsctl", "get", "interface", portName, column)
 }
 
 func addBridgeToOVS(ctx context.Context, nodeName, bridgeName string) {
