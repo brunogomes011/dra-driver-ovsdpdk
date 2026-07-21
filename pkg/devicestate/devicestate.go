@@ -120,7 +120,7 @@ func (d *DeviceState) updateConfig(vhostUser *ovsdpdkdrav1alpha1.VhostUserSpec) 
 	}
 
 	d.mutex.Lock()
-	d.vhostUserConfig = vhostUser
+	d.vhostUserConfig = vhostUserConfig
 	d.mutex.Unlock()
 }
 

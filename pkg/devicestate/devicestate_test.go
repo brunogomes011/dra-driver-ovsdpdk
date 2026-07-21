@@ -364,14 +364,17 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 			}
 			ds, mockFS, _ := newDeviceStateWithMockFS(ctx, spec1)
 
+			// Test default container root path is applied.
+			spec1.ContainerRootPath = consts.DefaultContainerRootPath
 			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, spec1).Return(nil).Once()
 
 			_, err := ds.PrepareResourceClaim(ctx, makeClaim("uid-perm-1", "pod-uid-p1", "claim-p1", "vhost-p1", "br0"))
 			Expect(err).NotTo(HaveOccurred())
 
 			spec2 := &ovsdpdkdrav1alpha1.VhostUserSpec{
-				User:  ovsdpdkdrav1alpha1.NewUserGroupIDFromID(2000),
-				Group: ovsdpdkdrav1alpha1.NewUserGroupIDFromID(2000),
+				ContainerRootPath: "/container",
+				User:              ovsdpdkdrav1alpha1.NewUserGroupIDFromID(2000),
+				Group:             ovsdpdkdrav1alpha1.NewUserGroupIDFromID(2000),
 			}
 			Expect(ds.UpdateConfig(ctx, &ovsdpdkdrav1alpha1.OvsDpdkConfigSpec{VhostUser: spec2})).To(Succeed())
 			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, spec2).Return(nil).Once()
