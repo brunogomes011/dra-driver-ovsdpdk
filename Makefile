@@ -15,8 +15,10 @@
 DRIVER_NAME := dra-driver-ovsdpdk
 MODULE      := github.com/amorenoz/dra-driver-ovsdpdk
 
-GOLANG_VERSION        ?= 1.24
+GOLANG_VERSION        ?= 1.26
 GOLANGCI_LINT_VERSION ?= v2.7.2
+CONTROLLER_GEN_VERSION ?= v0.21.0
+MOCKERY_VERSION        ?= v2.53.6
 
 CONTAINER_TOOL ?= podman
 REGISTRY       ?= quay.io/amorenoz
@@ -28,7 +30,9 @@ GOARCH ?= amd64
 
 BIN_DIR := $(CURDIR)/bin
 
-.PHONY: all build binary check vet lint test coverage vendor build-image push-image
+APIS := ovsdpdkdra/v1alpha1
+
+.PHONY: all build binary check vet lint test coverage vendor generate generate-deepcopy generate-crds generate-mocks build-image push-image deploy undeploy
 
 all: check test build
 
@@ -54,7 +58,7 @@ vet:
 	go vet ./...
 
 test:
-	go test -v -coverprofile=coverage.out ./...
+	go test -v -coverprofile=coverage.out ./cmd/... ./pkg/...
 
 coverage: test
 	go tool cover -func=coverage.out
@@ -62,8 +66,41 @@ coverage: test
 vendor:
 	go mod vendor
 
+# ---- code generation ------------------------------------------------------
+
+CONTROLLER_GEN := $(BIN_DIR)/controller-gen
+
+generate: generate-deepcopy generate-crds generate-mocks
+
+generate-deepcopy: $(CONTROLLER_GEN)
+	for api in $(APIS); do \
+		rm -f $(CURDIR)/pkg/api/$${api}/zz_generated.deepcopy.go; \
+		$(CONTROLLER_GEN) \
+			object:headerFile=$(CURDIR)/hack/boilerplate.generatego.txt \
+			paths=$(CURDIR)/pkg/api/$${api}/; \
+	done
+
+generate-crds: $(CONTROLLER_GEN)
+	@mkdir -p $(CURDIR)/deployments/crds/
+	$(CONTROLLER_GEN) \
+		crd \
+		paths=$(CURDIR)/pkg/api/ovsdpdkdra/v1alpha1/ \
+		output:crd:dir=$(CURDIR)/deployments/crds/
+
+$(CONTROLLER_GEN):
+	GOBIN=$(BIN_DIR) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION)
+
+MOCKERY := $(BIN_DIR)/mockery
+
+generate-mocks: $(MOCKERY)
+	$(MOCKERY)
+
+$(MOCKERY):
+	GOBIN=$(BIN_DIR) go install github.com/vektra/mockery/v2@$(MOCKERY_VERSION)
+
 build-image:
 	$(CONTAINER_TOOL) build \
+		--platform $(GOOS)/$(GOARCH) \
 		--build-arg GOLANG_VERSION=$(GOLANG_VERSION) \
 		-t $(IMAGE_NAME):$(IMAGE_TAG) \
 		-f $(CURDIR)/Dockerfile \
@@ -71,3 +108,17 @@ build-image:
 
 push-image: build-image
 	$(CONTAINER_TOOL) push $(IMAGE_NAME):$(IMAGE_TAG)
+
+# ---- cluster deployment ---------------------------------------------------
+
+deploy: ## Deploy the driver into the current kubectl context
+	kubectl apply -f $(CURDIR)/deployments/crds/
+	kubectl apply -f $(CURDIR)/deployments/namespace.yaml
+	kubectl apply -f $(CURDIR)/deployments/rbac.yaml
+	sed 's|IMAGE|$(IMAGE_NAME):$(IMAGE_TAG)|g' \
+		$(CURDIR)/deployments/daemonset.yaml | kubectl apply -f -
+
+undeploy: ## Remove the driver from the current kubectl context
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/rbac.yaml
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/namespace.yaml
+	kubectl delete --ignore-not-found -f $(CURDIR)/deployments/crds/

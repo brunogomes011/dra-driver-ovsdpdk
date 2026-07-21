@@ -20,6 +20,21 @@ const (
 	// DriverName is the name of the DRA driver as registered with Kubernetes.
 	DriverName = "ovsdpdk.k8snetworkplumbingwg.io"
 
+	// GroupName is the API group name for this driver's CRDs.
+	GroupName = "ovsdpdk.k8snetworkplumbingwg.io"
+
 	// DefaultNamespace is the default namespace where the driver watches for OvsDpdkResourcePolicy resources.
 	DefaultNamespace = "dra-driver-ovsdpdk"
+
+	// DefaultBridgeCapacity is the default number of allocatable devices (ports) per bridge.
+	DefaultBridgeCapacity = 32 * 1024
+
+	// VhostSocketFilename is the name of the vhost-user socket file.
+	VhostSocketFilename = "vhost.sock"
+
+	// HostRootPath is the vhost-user host base path.
+	HostRootPath = "/var/run/ovsdpdk"
+
+	// DefaultContainerRootPath is the default vhost-user container base path.
+	DefaultContainerRootPath = "/var/run/ovsdpdk/vhost-user"
 )

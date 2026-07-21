@@ -27,9 +27,18 @@ import (
 	"github.com/urfave/cli/v2"
 
 	"k8s.io/klog/v2"
+	"k8s.io/klog/v2/textlogger"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/cdi"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/controllers"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/devicestate"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/driver"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/flags"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/socketfs"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/types"
 )
 
@@ -66,6 +75,13 @@ func newApp() *cli.App {
 			EnvVars:     []string{"NAMESPACE"},
 		},
 		&cli.StringFlag{
+			Name:        "config-name",
+			Usage:       "Name of the OvsDpdkConfig cluster-scoped object to watch.",
+			Value:       "default",
+			Destination: &f.ConfigName,
+			EnvVars:     []string{"CONFIG_NAME"},
+		},
+		&cli.StringFlag{
 			Name:        "cdi-root",
 			Usage:       "Absolute path to the directory where CDI files will be generated.",
 			Value:       "/var/run/cdi",
@@ -100,17 +116,49 @@ func newApp() *cli.App {
 			if c.Args().Len() > 0 {
 				return fmt.Errorf("arguments not supported: %v", c.Args().Slice())
 			}
-			return f.LoggingConfig.Apply()
+			if err := f.LoggingConfig.Apply(); err != nil {
+				return err
+			}
+			// Wire controller-runtime to use the same klog backend so its
+			// internal logs are not silently dropped.
+			ctrl.SetLogger(textlogger.NewLogger(textlogger.NewConfig()))
+			return nil
 		},
 		Action: func(c *cli.Context) error {
+			restCfg, err := f.KubeClientConfig.RestConfig()
+			if err != nil {
+				return fmt.Errorf("create REST config: %v", err)
+			}
+
 			k8sClient, err := f.KubeClientConfig.NewCoreClient()
 			if err != nil {
 				return fmt.Errorf("create client: %v", err)
 			}
 
+			mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
+				Scheme: flags.Scheme,
+				Metrics: metricsserver.Options{
+					BindAddress: "0", // disabled
+				},
+				HealthProbeBindAddress: "0", // disabled
+				LeaderElection:         false,
+				// Restrict the cache for namespaced resources to the driver's
+				// own namespace so that only a namespaced Role (not a
+				// ClusterRole) is required to list/watch them.
+				Cache: cache.Options{
+					DefaultNamespaces: map[string]cache.Config{
+						f.Namespace: {},
+					},
+				},
+			})
+			if err != nil {
+				return fmt.Errorf("create controller manager: %v", err)
+			}
+
 			config := &types.Config{
 				Flags:     f,
 				K8sClient: k8sClient,
+				Manager:   mgr,
 			}
 
 			return run(c.Context, config)
@@ -144,9 +192,54 @@ func run(ctx context.Context, config *types.Config) error {
 		"driverName", consts.DriverName,
 	)
 
-	// TBD
+	cdiHandler, err := cdi.New(config.Flags.CdiRoot)
+	if err != nil {
+		return fmt.Errorf("create DRI Handler: %w", err)
+	}
 
-	<-ctx.Done()
+	devState := devicestate.New(cdiHandler, socketfs.New())
+
+	dvr, err := driver.New(ctx, devState, config.K8sClient, config.Flags.NodeName, config.DriverPluginPath())
+	if err != nil {
+		return fmt.Errorf("create DRA driver: %w", err)
+	}
+	defer dvr.Stop()
+
+	reconciler := controllers.NewOvsDpdkResourcePolicyReconciler(
+		config.Manager.GetClient(),
+		config.Flags.NodeName,
+		config.Flags.Namespace,
+		devState,
+	)
+	if err := reconciler.SetupWithManager(config.Manager); err != nil {
+		return fmt.Errorf("setup controller: %w", err)
+	}
+
+	configReconciler := controllers.NewOvsDpdkConfigReconciler(
+		config.Manager.GetClient(),
+		config.Flags.ConfigName,
+		devState,
+	)
+	if err := configReconciler.SetupWithManager(config.Manager); err != nil {
+		return fmt.Errorf("setup config controller: %w", err)
+	}
+
+	mgrErrCh := make(chan error, 1)
+	go func() {
+		if err := config.Manager.Start(ctx); err != nil {
+			mgrErrCh <- fmt.Errorf("controller manager exited: %w", err)
+		}
+		close(mgrErrCh)
+	}()
+
+	select {
+	case <-ctx.Done():
+	case err := <-mgrErrCh:
+		if err != nil {
+			config.CancelMainCtx(err)
+		}
+	}
+
 	stop() // restore default signal handling as soon as possible
 	if err := context.Cause(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error(err, "Shutting down due to error")

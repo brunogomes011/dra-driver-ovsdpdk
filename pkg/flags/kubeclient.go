@@ -21,9 +21,22 @@ import (
 
 	"github.com/urfave/cli/v2"
 
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	coreclientset "k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+
+	ovsdpdkdrav1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsdpdkdra/v1alpha1"
 )
+
+// Scheme is the runtime scheme used by the controller-runtime manager.
+var Scheme = runtime.NewScheme()
+
+func init() { //nolint:gochecknoinits
+	utilruntime.Must(clientgoscheme.AddToScheme(Scheme))
+	utilruntime.Must(ovsdpdkdrav1alpha1.AddToScheme(Scheme))
+}
 
 // KubeClientConfig holds the flags needed to build a Kubernetes client.
 type KubeClientConfig struct {
@@ -53,15 +66,23 @@ func (k *KubeClientConfig) Flags() []cli.Flag {
 	}
 }
 
-// NewCoreClient builds a core Kubernetes client using the in-cluster config.
-func (k *KubeClientConfig) NewCoreClient() (coreclientset.Interface, error) {
+// RestConfig returns the in-cluster REST config with QPS/Burst applied.
+func (k *KubeClientConfig) RestConfig() (*rest.Config, error) {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, fmt.Errorf("create in-cluster client configuration: %v", err)
 	}
-
 	cfg.QPS = float32(k.KubeAPIQPS)
 	cfg.Burst = k.KubeAPIBurst
+	return cfg, nil
+}
+
+// NewCoreClient builds a core Kubernetes client using the in-cluster config.
+func (k *KubeClientConfig) NewCoreClient() (coreclientset.Interface, error) {
+	cfg, err := k.RestConfig()
+	if err != nil {
+		return nil, err
+	}
 
 	client, err := coreclientset.NewForConfig(cfg)
 	if err != nil {

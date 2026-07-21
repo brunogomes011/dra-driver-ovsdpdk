@@ -1,0 +1,91 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: ovsdpdkconfigs.ovsdpdk.k8snetworkplumbingwg.io
+spec:
+  group: ovsdpdk.k8snetworkplumbingwg.io
+  names:
+    kind: OvsDpdkConfig
+    listKind: OvsDpdkConfigList
+    plural: ovsdpdkconfigs
+    singular: ovsdpdkconfig
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: OvsDpdkConfig defines the global configuration for the OVS-DPDK
+          DRA Driver.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: OvsDpdkConfig defines the desired configuration of the OVS-DPDK
+              DRA Driver.
+            properties:
+              vhostUser:
+                description: VhostUser configures the vhost-user socket directory
+                  options.
+                properties:
+                  aclUsers:
+                    description: |-
+                      ACLUsers is a list of user names granted access to the socket directory
+                      via filesystem ACLs (setfacl).
+                    items:
+                      type: string
+                    type: array
+                  containerRootPath:
+                    description: |-
+                      ContainerRootPath is the path inside the container where the per-pod
+                      socket directory is mounted.
+                    type: string
+                  group:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      Group is the owning group of the vhost-user socket directory. Can be
+                      specified as a group name (e.g. "qemu") or a numeric GID (e.g. 718).
+                    x-kubernetes-int-or-string: true
+                  selinuxLabel:
+                    description: |-
+                      SelinuxLabel is the SELinux label applied to the socket directory.
+                      Must be in the standard SELinux context format: user:role:type:level.
+                    pattern: ^[^:]+:[^:]+:[^:]+:[^:]+$
+                    type: string
+                  user:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      User is the owner of the vhost-user socket directory. Can be specified
+                      as a user name (e.g. "openvswitch") or a numeric UID (e.g. 107).
+                    x-kubernetes-int-or-string: true
+                required:
+                - group
+                - user
+                type: object
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true

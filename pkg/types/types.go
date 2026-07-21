@@ -20,6 +20,8 @@ import (
 	"context"
 
 	coreclientset "k8s.io/client-go/kubernetes"
+	"k8s.io/dynamic-resource-allocation/kubeletplugin"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/flags"
@@ -29,6 +31,7 @@ import (
 type Flags struct {
 	NodeName                      string
 	Namespace                     string
+	ConfigName                    string
 	CdiRoot                       string
 	KubeletRegistrarDirectoryPath string
 	KubeletPluginsDirectoryPath   string
@@ -40,10 +43,32 @@ type Flags struct {
 type Config struct {
 	Flags         *Flags
 	K8sClient     coreclientset.Interface
+	Manager       ctrl.Manager
 	CancelMainCtx context.CancelCauseFunc
 }
 
 // DriverPluginPath returns the path where the driver registers its kubelet plugin socket.
 func (c *Config) DriverPluginPath() string {
 	return c.Flags.KubeletPluginsDirectoryPath + "/" + consts.DriverName
+}
+
+// MountInfo describes the vhost-user socket directory on both sides of the CDI mount.
+type MountInfo struct {
+	HostDir      string
+	ContainerDir string
+}
+
+// SocketInfo describes the vhost-user socket path on both sides of the CDI mount.
+type SocketInfo struct {
+	HostPath      string
+	ContainerPath string
+}
+
+// PreparedDevice is the unit of prepared state for a single ResourceClaim.
+type PreparedDevice struct {
+	Device              kubeletplugin.Device
+	ClaimNamespacedName kubeletplugin.NamespacedObject
+	BridgeName          string
+	Mount               MountInfo
+	Socket              SocketInfo
 }
