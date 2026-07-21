@@ -75,6 +75,9 @@ type OvsPortParams struct {
 	IngressRate int
 	// IngressBurst sets ingress_policing_burst (kb) on the Interface; 0 means OVS default.
 	IngressBurst int
+	// Mtu, when non-nil, sets mtu_request on the Interface.
+	// Valid range: 68 (RFC 791 minimum) to 65535.
+	Mtu *int
 }
 
 // OVSClient wraps the libovsdb client for interacting with OVSDB.
@@ -383,6 +386,7 @@ func (c *OVSClient) CreatePort(ctx context.Context, bridgeName, portName, socket
 		Options:              map[string]string{"vhost-server-path": socketPath},
 		IngressPolicingRate:  params.IngressRate,
 		IngressPolicingBurst: params.IngressBurst,
+		MTURequest:           params.Mtu,
 	}
 	ifaceOps, err := c.client.Create(iface)
 	if err != nil {
