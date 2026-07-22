@@ -17,10 +17,15 @@
 package e2e_test
 
 import (
+	"path/filepath"
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	corev1 "k8s.io/api/core/v1"
 	resourceapi "k8s.io/api/resource/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var _ = Describe("ResourceSlice advertisement", func() {
@@ -110,5 +115,79 @@ var _ = Describe("Node selector", func() {
 		nodeSlices, err := resourceSlicesForNode(ctx, workers[0])
 		Expect(err).NotTo(HaveOccurred())
 		Expect(deviceNamesFromSlices(nodeSlices)).NotTo(ContainElement("br-dpdk2"))
+	})
+})
+
+var _ = Describe("Claim lifecycle on worker1", func() {
+	const (
+		claimName = "e2e-claim-lifecycle"
+		podName   = "e2e-pod-lifecycle"
+	)
+
+	var pod *corev1.Pod
+	var socketDir string
+
+	BeforeEach(func(ctx SpecContext) {
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{"e2e-lifecycle-policy", workers[0], []string{"br-dpdk0"}}))
+		waitForDeviceInSlice(ctx, workers[0], "br-dpdk0")
+		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{claimName, testNamespace, "br-dpdk0"}))
+		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{podName, testNamespace, claimName}))
+		pod = waitForPodRunning(ctx, testNamespace, podName)
+		socketDir = filepath.Join(hostSocketRoot, string(pod.UID)+"_"+claimName+"_vhost-port")
+		Eventually(func() bool { return dirExists(ctx, pod.Spec.NodeName, socketDir) }).
+			WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(BeTrue())
+	})
+
+	It("socket directory is created", func(_ SpecContext) {
+		// Assertion is in BeforeEach — if we got here, the dir exists.
+	})
+
+	It("socket directory has correct ownership per OvsDpdkConfig", func(ctx SpecContext) {
+		uid, gid := statOwnership(ctx, pod.Spec.NodeName, socketDir)
+		Expect(uid).To(Equal("1001"), "UID should be 1001 (ovsdpdk)")
+		Expect(gid).To(Equal("107"), "GID should be 107 (qemu)")
+	})
+
+	It("socket directory has ACL entry for ovsdpdk user", func(ctx SpecContext) {
+		Expect(hasACLEntry(ctx, pod.Spec.NodeName, socketDir, "user:1001")).To(BeTrue())
+	})
+
+	It("socket directory is removed when pod is deleted", func(ctx SpecContext) {
+		nodeName := pod.Spec.NodeName
+		deletePodAndWait(ctx, testNamespace, podName)
+		Eventually(func() bool { return dirExists(ctx, nodeName, socketDir) }).
+			WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(BeFalse())
+	})
+})
+
+var _ = Describe("Claim status", func() {
+	const (
+		claimName = "e2e-claim-status"
+		podName   = "e2e-pod-status"
+	)
+
+	It("ResourceClaim.Status.Devices[0].Data is populated after prepare", func(ctx SpecContext) {
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{"e2e-status-policy", workers[0], []string{"br-dpdk0"}}))
+		waitForDeviceInSlice(ctx, workers[0], "br-dpdk0")
+		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{claimName, testNamespace, "br-dpdk0"}))
+		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{podName, testNamespace, claimName}))
+		waitForPodRunning(ctx, testNamespace, podName)
+
+		var claim resourceapi.ResourceClaim
+		Eventually(func(g Gomega) {
+			c, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, claimName, metav1.GetOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(c.Status.Devices).NotTo(BeEmpty())
+			g.Expect(c.Status.Devices[0].Data).NotTo(BeNil())
+			claim = *c
+		}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+
+		data := string(claim.Status.Devices[0].Data.Raw)
+		Expect(data).To(ContainSubstring(claimName))
+		Expect(data).To(SatisfyAny(ContainSubstring("hostPath"), ContainSubstring("hostDir")))
+		Expect(data).To(SatisfyAny(ContainSubstring("containerPath"), ContainSubstring("containerDir")))
+		Expect(data).To(ContainSubstring("bridgeName"))
 	})
 })
