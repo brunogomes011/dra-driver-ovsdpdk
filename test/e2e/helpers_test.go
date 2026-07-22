@@ -28,6 +28,9 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // --- Template rendering ---
@@ -55,6 +58,14 @@ func mustRenderManifest(name string, data any) string {
 }
 
 // --- Template data types ---
+
+type claimData struct {
+	Name, Namespace, BridgeName string
+}
+
+type podData struct {
+	Name, Namespace, ClaimName string
+}
 
 type policyData struct {
 	Name, NodeName string
@@ -115,6 +126,129 @@ func runKubectlStdin(stdin string, args ...string) {
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "kubectl %v:\n%s", args, out)
 }
 
+// --- kubectl exec helpers ---
+
+// kubectlExec runs a command inside a pod.  If container is empty, the
+// default container is used.
+func kubectlExec(ctx context.Context, namespace, podName, container string, args ...string) (string, error) {
+	kubectlArgs := []string{"--kubeconfig", kubeconfig, "-n", namespace, "exec"}
+	if container != "" {
+		kubectlArgs = append(kubectlArgs, "-c", container)
+	}
+	kubectlArgs = append(kubectlArgs, podName, "--")
+	kubectlArgs = append(kubectlArgs, args...)
+
+	var out, errOut bytes.Buffer
+	cmd := exec.CommandContext(ctx, "kubectl", kubectlArgs...)
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("kubectl exec %s %v: %w\n%s", podName, args, err, errOut.String())
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
+// driverPodExec runs a command inside the driver pod on nodeName.
+func driverPodExec(ctx context.Context, nodeName string, args ...string) (string, error) {
+	podName, err := driverPodOnNode(ctx, nodeName)
+	if err != nil {
+		return "", err
+	}
+	return kubectlExec(ctx, driverNamespace, podName, "", args...)
+}
+
+func driverPodOnNode(ctx context.Context, nodeName string) (string, error) {
+	pods, err := cs.CoreV1().Pods(driverNamespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=dra-driver-ovsdpdk",
+		FieldSelector: "spec.nodeName=" + nodeName,
+	})
+	if err != nil {
+		return "", fmt.Errorf("list driver pods on %s: %w", nodeName, err)
+	}
+	if len(pods.Items) == 0 {
+		return "", fmt.Errorf("no driver pod found on node %s", nodeName)
+	}
+	return pods.Items[0].Name, nil
+}
+
+// --- Host filesystem helpers (via driver pod) ---
+
+func dirExists(ctx context.Context, nodeName, path string) bool {
+	_, err := driverPodExec(ctx, nodeName, "test", "-d", path)
+	return err == nil
+}
+
+func statOwnership(ctx context.Context, nodeName, path string) (uid, gid string) {
+	GinkgoHelper()
+	out, err := driverPodExec(ctx, nodeName, "stat", "-c", "%u %g", path)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "stat %s on %s", path, nodeName)
+	parts := strings.Fields(out)
+	ExpectWithOffset(1, parts).To(HaveLen(2), "unexpected stat output: %q", out)
+	return parts[0], parts[1]
+}
+
+func hasACLEntry(ctx context.Context, nodeName, path, entry string) bool {
+	out, err := driverPodExec(ctx, nodeName, "getfacl", path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(out, entry)
+}
+
+// --- Pod helpers ---
+
+func waitForPodRunning(ctx context.Context, namespace, name string) *corev1.Pod {
+	GinkgoHelper()
+	var pod *corev1.Pod
+	EventuallyWithOffset(1, func(g Gomega) {
+		p, err := cs.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+		g.Expect(err).NotTo(HaveOccurred())
+		// Fail fast on terminal states.
+		g.Expect(p.Status.Phase).NotTo(Equal(corev1.PodFailed), "pod %s failed", name)
+		if p.Status.Phase != corev1.PodRunning {
+			// Log why the pod is not running yet for diagnostics.
+			events, _ := cs.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+				FieldSelector: "involvedObject.name=" + name + ",involvedObject.kind=Pod",
+			})
+			if events != nil {
+				for _, ev := range events.Items {
+					fmt.Fprintf(GinkgoWriter, "[wait] pod %s: %s: %s\n", name, ev.Reason, ev.Message)
+				}
+			}
+		}
+		g.Expect(p.Status.Phase).To(Equal(corev1.PodRunning), "pod %s phase", name)
+		pod = p
+	}).WithTimeout(90 * time.Second).WithPolling(5 * time.Second).Should(Succeed())
+	return pod
+}
+
+func deletePodAndWait(ctx context.Context, namespace, name string) {
+	GinkgoHelper()
+	_ = cs.CoreV1().Pods(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	EventuallyWithOffset(1, func(g Gomega) {
+		p, err := cs.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return // pod is gone — success
+		}
+		if p.DeletionTimestamp != nil {
+			// Check for DRA unprepare failures in pod events.
+			events, _ := cs.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+				FieldSelector: "involvedObject.name=" + name + ",involvedObject.kind=Pod",
+			})
+			if events != nil {
+				for _, ev := range events.Items {
+					if strings.Contains(ev.Reason, "FailedUnprepareDynamicResources") ||
+						strings.Contains(ev.Reason, "FailedPrepareDynamicResources") {
+						fmt.Fprintf(GinkgoWriter, "[ERROR] pod %s: %s: %s\n", name, ev.Reason, ev.Message)
+					}
+				}
+			}
+			fmt.Fprintf(GinkgoWriter, "[wait] pod %s still terminating (phase=%s)\n", name, p.Status.Phase)
+		}
+		g.Expect(err).To(HaveOccurred(), "pod %s still exists (phase=%s)", name, p.Status.Phase)
+	}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+}
+
 // waitForDeviceInSlice polls until the named device appears in the
 // ResourceSlices for the given node.
 func waitForDeviceInSlice(ctx context.Context, nodeName, deviceName string) {
@@ -125,3 +259,4 @@ func waitForDeviceInSlice(ctx context.Context, nodeName, deviceName string) {
 		g.Expect(deviceNamesFromSlices(nodeSlices)).To(ContainElement(deviceName))
 	}).WithTimeout(60 * time.Second).WithPolling(5 * time.Second).Should(Succeed())
 }
+
