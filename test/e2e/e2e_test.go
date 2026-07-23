@@ -639,6 +639,135 @@ var _ = Describe("Topology Device Plugin", func() {
 	})
 })
 
+var _ = Describe("MTU CRD validation", func() {
+	It("valid mtu is accepted by the API server", func(_ SpecContext) {
+		manifest := mustRenderManifest("policy-with-mtu.yaml.tmpl",
+			mtuPolicyData{"e2e-mtu-valid", workers[0], "br-dpdk0", 9000})
+		applyAndCleanup(manifest)
+	})
+
+	It("mtu below 68 is rejected by the API server", func(_ SpecContext) {
+		manifest := mustRenderManifest("policy-with-mtu.yaml.tmpl",
+			mtuPolicyData{"e2e-mtu-too-small", workers[0], "br-dpdk0", 67})
+		Expect(tryApplyYAML(manifest)).To(HaveOccurred())
+	})
+
+	It("mtu above 65535 is rejected by the API server", func(_ SpecContext) {
+		manifest := mustRenderManifest("policy-with-mtu.yaml.tmpl",
+			mtuPolicyData{"e2e-mtu-too-large", workers[0], "br-dpdk0", 65536})
+		Expect(tryApplyYAML(manifest)).To(HaveOccurred())
+	})
+})
+
+var _ = Describe("MTU", Ordered, func() {
+	const (
+		claimName = "e2e-mtu-claim"
+		podName   = "e2e-mtu-pod"
+		bridge    = "br-dpdk0"
+		mtu       = 9000
+	)
+
+	var pod *corev1.Pod
+	var ports []string
+	var claimUID string
+
+	BeforeAll(func(ctx SpecContext) {
+		applyAndCleanup(mustRenderManifest("policy-with-mtu.yaml.tmpl",
+			mtuPolicyData{"e2e-mtu-policy", workers[0], bridge, mtu}))
+		waitForDeviceInSlice(ctx, workers[0], bridge)
+
+		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl",
+			claimData{claimName, testNamespace, bridge}))
+		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl",
+			podData{podName, testNamespace, claimName}))
+		pod = waitForPodRunning(ctx, testNamespace, podName)
+
+		c, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, claimName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		claimUID = string(c.UID)
+
+		Eventually(func(g Gomega) {
+			p, err := ovsPortsForClaim(ctx, pod.Spec.NodeName, claimUID)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(p).NotTo(BeEmpty())
+			ports = p
+		}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+	})
+
+	It("mtu attribute is present in the ResourceSlice device", func(ctx SpecContext) {
+		attrKey := resourceapi.QualifiedName(driverName + "/mtu")
+		nodeSlices, err := resourceSlicesForNode(ctx, workers[0])
+		Expect(err).NotTo(HaveOccurred())
+		var found bool
+		for _, s := range nodeSlices {
+			for _, d := range s.Spec.Devices {
+				if d.Name == bridge {
+					attr, ok := d.Attributes[attrKey]
+					Expect(ok).To(BeTrue(), "mtu attribute missing on device %s", bridge)
+					Expect(attr.IntValue).NotTo(BeNil())
+					Expect(*attr.IntValue).To(Equal(int64(mtu)))
+					found = true
+				}
+			}
+		}
+		Expect(found).To(BeTrue(), "device %s not found in ResourceSlices", bridge)
+	})
+
+	It("mtu_request is set on the OVS interface", func(ctx SpecContext) {
+		got, err := ovsInterfaceGet(ctx, pod.Spec.NodeName, ports[0], "mtu_request")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(fmt.Sprintf("%d", mtu)))
+	})
+
+	It("mtu is present in the in-container device metadata file", func(ctx SpecContext) {
+		Eventually(func(g Gomega) {
+			md, err := readDeviceMetadataFile(ctx, testNamespace, podName, "consumer",
+				claimName, "vhost-port")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(md.Requests).To(HaveLen(1))
+			g.Expect(md.Requests[0].Devices).To(HaveLen(1))
+			dev := md.Requests[0].Devices[0]
+			mtuAttr, ok := dev.Attributes["mtu"]
+			g.Expect(ok).To(BeTrue(), "mtu attribute missing from device metadata, got: %v", dev.Attributes)
+			g.Expect(mtuAttr.IntValue).NotTo(BeNil())
+			g.Expect(*mtuAttr.IntValue).To(Equal(int64(mtu)))
+		}).WithTimeout(30 * time.Second).WithPolling(time.Second).Should(Succeed())
+	})
+})
+
+var _ = Describe("MTU absent", func() {
+	It("mtu_request is absent when no mtu is configured", func(ctx SpecContext) {
+		const (
+			plainClaimName = "e2e-mtu-absent-claim"
+			plainPodName   = "e2e-mtu-absent-pod"
+			bridge         = "br-dpdk1"
+		)
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{"e2e-mtu-absent-policy", workers[0], []string{bridge}}))
+		waitForDeviceInSlice(ctx, workers[0], bridge)
+		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl",
+			claimData{plainClaimName, testNamespace, bridge}))
+		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl",
+			podData{plainPodName, testNamespace, plainClaimName}))
+		plainPod := waitForPodRunning(ctx, testNamespace, plainPodName)
+
+		c, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, plainClaimName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		var plainPorts []string
+		Eventually(func(g Gomega) {
+			p, err := ovsPortsForClaim(ctx, plainPod.Spec.NodeName, string(c.UID))
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(p).NotTo(BeEmpty())
+			plainPorts = p
+		}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+
+		got, err := ovsInterfaceGet(ctx, plainPod.Spec.NodeName, plainPorts[0], "mtu_request")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal("[]")) // OVS returns [] for unset optional integer columns
+	})
+})
+
 var _ = Describe("Ingress policing", Ordered, func() {
 	const (
 		claimName = "e2e-policing"

@@ -19,6 +19,7 @@ package e2e_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -32,6 +33,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/dynamic-resource-allocation/api/metadata"
+	"k8s.io/dynamic-resource-allocation/devicemetadata"
 )
 
 // --- Template rendering ---
@@ -95,6 +98,11 @@ type policyData struct {
 
 type topologyPolicyData struct {
 	Name, NodeName, BridgeName, TopologyResource string
+}
+
+type mtuPolicyData struct {
+	Name, NodeName, BridgeName string
+	Mtu                        int
 }
 
 type topologyPodData struct {
@@ -395,6 +403,33 @@ func waitForNodeResourceGone(ctx context.Context, nodeName, resourceName string)
 		_, ok := node.Status.Allocatable[resName]
 		g.Expect(ok).To(BeFalse(), "resource %s still in allocatable", resourceName)
 	}).WithTimeout(90 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+}
+
+// readDeviceMetadataFile reads and parses the DRA device metadata file
+// (KEP-5304) for a directly referenced ResourceClaim from inside the named
+// container. The file is mounted automatically by the kubelet at:
+//
+//	/var/run/kubernetes.io/dra-device-attributes/resourceclaims/
+//	  <claimName>/<requestName>/<driverName>-metadata.json
+//
+// It returns the decoded internal DeviceMetadata object.
+func readDeviceMetadataFile(ctx context.Context, namespace, podName, container, claimName, requestName string) (*metadata.DeviceMetadata, error) {
+	metadataPath := strings.Join([]string{
+		"/var/run/kubernetes.io/dra-device-attributes",
+		"resourceclaims",
+		claimName,
+		requestName,
+		driverName + "-metadata.json",
+	}, "/")
+	raw, err := kubectlExec(ctx, namespace, podName, container, "cat", metadataPath)
+	if err != nil {
+		return nil, err
+	}
+	var md metadata.DeviceMetadata
+	if err := devicemetadata.DecodeMetadataFromStream(json.NewDecoder(strings.NewReader(raw)), &md); err != nil {
+		return nil, fmt.Errorf("decode metadata file %s: %w", metadataPath, err)
+	}
+	return &md, nil
 }
 
 // waitForDeviceInSlice polls until the named device appears in the
