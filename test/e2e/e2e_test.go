@@ -864,3 +864,52 @@ var _ = Describe("Ingress policing absent", func() {
 		Expect(got).To(Equal("0"))
 	})
 })
+
+var _ = Describe("Checkpoint persistence across driver restart", func() {
+	const (
+		claimName = "e2e-persist-claim"
+		podName   = "e2e-persist-pod"
+		bridge    = "br-dpdk0"
+	)
+
+	It("unprepare cleans up OVS port and socket dir after driver restart", func(ctx SpecContext) {
+		nodeName := workers[0]
+
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{"e2e-persist-policy", nodeName, []string{bridge}}))
+		waitForDeviceInSlice(ctx, nodeName, bridge)
+		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl",
+			claimData{claimName, testNamespace, bridge}))
+		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl",
+			podData{podName, testNamespace, claimName}))
+		pod := waitForPodRunning(ctx, testNamespace, podName)
+
+		claim, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, claimName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		claimUID := string(claim.UID)
+
+		Eventually(func(g Gomega) {
+			p, err := ovsPortsForClaim(ctx, nodeName, claimUID)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(p).NotTo(BeEmpty())
+		}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+
+		socketDir := filepath.Join(hostSocketRoot, string(pod.UID)+"_"+claimName+"_vhost-port")
+
+		By("Restarting the driver pod on " + nodeName)
+		restartDriverOnNode(ctx, nodeName)
+		waitForDeviceInSlice(ctx, nodeName, bridge)
+
+		By("Deleting the test pod to trigger unprepare after restart")
+		deletePodAndWait(ctx, testNamespace, podName)
+
+		Eventually(func(g Gomega) {
+			p, err := ovsPortsForClaim(ctx, nodeName, claimUID)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(p).To(BeEmpty())
+		}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+
+		Eventually(func() bool { return dirExists(ctx, nodeName, socketDir) }).
+			WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(BeFalse())
+	})
+})
