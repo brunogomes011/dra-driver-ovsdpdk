@@ -443,3 +443,29 @@ func waitForDeviceInSlice(ctx context.Context, nodeName, deviceName string) {
 	}).WithTimeout(60 * time.Second).WithPolling(5 * time.Second).Should(Succeed())
 }
 
+// restartDriverOnNode deletes the driver pod on the given node and waits for
+// the DaemonSet to recreate it with a new Running pod.
+func restartDriverOnNode(ctx context.Context, nodeName string) {
+	GinkgoHelper()
+
+	oldPodName, err := driverPodOnNode(ctx, nodeName)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "find driver pod on %s", nodeName)
+
+	err = cs.CoreV1().Pods(driverNamespace).Delete(ctx, oldPodName, metav1.DeleteOptions{})
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "delete driver pod %s", oldPodName)
+
+	EventuallyWithOffset(1, func(g Gomega) {
+		pods, err := cs.CoreV1().Pods(driverNamespace).List(ctx, metav1.ListOptions{
+			LabelSelector: "app=dra-driver-ovsdpdk",
+			FieldSelector: "spec.nodeName=" + nodeName,
+		})
+		g.Expect(err).NotTo(HaveOccurred())
+		var found bool
+		for _, p := range pods.Items {
+			if p.Name != oldPodName && p.Status.Phase == corev1.PodRunning {
+				found = true
+			}
+		}
+		g.Expect(found).To(BeTrue(), "new driver pod not yet Running on %s", nodeName)
+	}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+}
