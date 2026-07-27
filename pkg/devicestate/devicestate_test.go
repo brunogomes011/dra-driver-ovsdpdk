@@ -364,14 +364,17 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 			}
 			ds, mockFS, _ := newDeviceStateWithMockFS(ctx, spec1)
 
+			// Test default container root path is applied.
+			spec1.ContainerRootPath = consts.DefaultContainerRootPath
 			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, spec1).Return(nil).Once()
 
 			_, err := ds.PrepareResourceClaim(ctx, makeClaim("uid-perm-1", "pod-uid-p1", "claim-p1", "vhost-p1", "br0"))
 			Expect(err).NotTo(HaveOccurred())
 
 			spec2 := &ovsdpdkdrav1alpha1.VhostUserSpec{
-				User:  ovsdpdkdrav1alpha1.NewUserGroupIDFromID(2000),
-				Group: ovsdpdkdrav1alpha1.NewUserGroupIDFromID(2000),
+				ContainerRootPath: "/container",
+				User:              ovsdpdkdrav1alpha1.NewUserGroupIDFromID(2000),
+				Group:             ovsdpdkdrav1alpha1.NewUserGroupIDFromID(2000),
 			}
 			Expect(ds.UpdateConfig(ctx, &ovsdpdkdrav1alpha1.OvsDpdkConfigSpec{VhostUser: spec2})).To(Succeed())
 			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, spec2).Return(nil).Once()
@@ -406,6 +409,26 @@ var _ = Describe("DeviceState prepare/unprepare", func() {
 			err = ds.UnprepareResourceClaim(ctx, pd)
 			Expect(err).To(HaveOccurred())
 			Expect(err).To(MatchError(ContainSubstring("remove socket directory")))
+		})
+	})
+
+	Describe("PrepareResourceClaim Device.Metadata", func() {
+		It("should always populate Device.Metadata with vhost-user-path", func(ctx SpecContext) {
+			ds, mockFS, _ := newDeviceStateWithMockFS(ctx, nil)
+			mockFS.EXPECT().CreateSocketDir(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+			claim := makeClaim("abcdef12-0000-0000-0000-000000000030", "pod-uid-meta", "claim-meta", "vhost-meta", "br-dpdk0")
+			pd, err := ds.PrepareResourceClaim(ctx, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			meta := pd.Device.Metadata
+			Expect(meta).NotTo(BeNil())
+
+			socketAttr, ok := meta.Attributes["vhost-user-path"]
+			Expect(ok).To(BeTrue())
+			Expect(socketAttr.StringValue).NotTo(BeNil())
+			Expect(*socketAttr.StringValue).To(Equal(pd.Socket.ContainerPath))
+			Expect(*socketAttr.StringValue).To(HavePrefix(consts.DefaultContainerRootPath))
 		})
 	})
 })
