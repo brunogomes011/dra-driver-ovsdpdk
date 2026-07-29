@@ -26,7 +26,7 @@ metadata:
   name: default
 spec:
   vhostUser:
-    containerRootPath: /var/run/ovsdpdk/vhost-user
+    containerRootPath: /var/run/ovsdpdk
     user: openvswitch       # name or numeric UID
     group: 107              # name or numeric GID
     selinuxLabel: "system_u:object_r:container_file_t:s0"
@@ -36,7 +36,7 @@ spec:
 
 | Field | Required | Description |
 |---|---|---|
-| `vhostUser.containerRootPath` | no | Container root for CDI mount. Default: `/var/run/ovsdpdk/vhost-user` |
+| `vhostUser.containerRootPath` | no | Container root for CDI mount. Default: `/var/run/ovsdpdk` |
 | `vhostUser.user` | no | Owner of the socket directory (name or UID) |
 | `vhostUser.group` | no | Group of the socket directory (name or GID) |
 | `vhostUser.selinuxLabel` | no | SELinux label applied to the socket directory (`user:role:type:level`) |
@@ -95,7 +95,7 @@ make build-image
 podman push "${IMAGE_NAME}:${IMAGE_TAG}"
 ```
 
-### Deploy
+### Deploy on Kubernetes
 
 ```bash
 # CRD, namespace, RBAC, and DaemonSet in one shot:
@@ -103,9 +103,9 @@ make deploy
 
 # Or step by step:
 kubectl apply -f deployments/crds/
-kubectl apply -f deployments/namespace.yaml
-kubectl apply -f deployments/rbac.yaml
-sed "s|IMAGE|${IMAGE_NAME}:${IMAGE_TAG}|g" deployments/daemonset.yaml | kubectl apply -f -
+kubectl kustomize deployments/k8s/ | \
+    sed "s|IMAGE|${IMAGE_NAME}:${IMAGE_TAG}|g" | \
+    kubectl apply -f -
 ```
 
 Wait for rollout:
@@ -117,17 +117,14 @@ kubectl logs -n dra-driver-ovsdpdk -l app=dra-driver-ovsdpdk --prefix
 
 ### Configure the driver
 
-Apply the global config and a resource policy, then create a DeviceClass:
+Apply the global config and a resource policy.
 
 ```bash
 # Global vhost-user settings (edit to match your environment):
-kubectl apply -f deployments/example-config.yaml
+kubectl apply -f deployments/examples/k8s-config.yaml
 
 # Bridge policy (edit bridges and nodeSelector):
-kubectl apply -f deployments/example-policy.yaml
-
-# DeviceClass:
-kubectl apply -f deployments/example-deviceclass.yaml
+kubectl apply -f deployments/examples/policy.yaml
 ```
 
 Verify the driver published ResourceSlices:
@@ -139,8 +136,10 @@ kubectl get resourceslices -o wide
 ### Consume a device
 
 The recommended pattern is a `ResourceClaimTemplate` so that each pod gets its
-own claim. The pod-local claim name (here `vhost`) is used for the socket path,
-giving stable, predictable paths across pod restarts and VM migrations:
+own claim. The socket path is built from the pod-local claim name (here `vhost`)
+and the request name (here `vhost-port`), giving stable, predictable paths
+across pod restarts and VM migrations. A single claim can contain multiple
+requests, each getting its own socket directory:
 
 ```yaml
 apiVersion: resource.k8s.io/v1
@@ -199,12 +198,12 @@ kubectl get resourceclaim my-dpdk-pod-vhost-p6bzb \
   "bridgeName": "br-dpdk0",
   "cdiDeviceID": "ovsdpdk.k8snetworkplumbingwg.io/vhost-user=aaa85ca7",
   "mount": {
-    "containerDir": "/var/run/ovsdpdk/vhost-user/vhost",
-    "hostDir": "/var/run/ovsdpdk/c362b1d7-d4ea-4efe-9e90-e4cd83131baf/vhost"
+    "containerDir": "/var/run/ovsdpdk/vhost/vhost-port",
+    "hostDir": "/var/run/ovsdpdk/c362b1d7-d4ea-4efe-9e90-e4cd83131baf_vhost_vhost-port"
   },
   "socket": {
-    "containerPath": "/var/run/ovsdpdk/vhost-user/vhost/vhost.sock",
-    "hostPath": "/var/run/ovsdpdk/c362b1d7-d4ea-4efe-9e90-e4cd83131baf/vhost/vhost.sock"
+    "containerPath": "/var/run/ovsdpdk/vhost/vhost-port/vhost.sock",
+    "hostPath": "/var/run/ovsdpdk/c362b1d7-d4ea-4efe-9e90-e4cd83131baf_vhost_vhost-port/vhost.sock"
   }
 }
 ```
@@ -216,10 +215,30 @@ kubectl get resourceclaim my-dpdk-pod-vhost-p6bzb \
 
 ```bash
 make undeploy
-# also remove config, policies, and the DeviceClass:
-kubectl delete -f deployments/example-config.yaml
-kubectl delete -f deployments/example-policy.yaml
-kubectl delete -f deployments/example-deviceclass.yaml
+# also remove config and policies:
+kubectl delete -f deployments/examples/k8s-config.yaml
+kubectl delete -f deployments/examples/policy.yaml
+```
+
+### Deploying on OpenShift
+
+```bash
+make deploy-openshift
+```
+
+Then apply the OpenShift-specific config and a bridge policy:
+
+```bash
+kubectl apply -f deployments/examples/openshift-config.yaml
+kubectl apply -f deployments/examples/policy.yaml
+```
+
+To remove:
+
+```bash
+make undeploy-openshift
+kubectl delete -f deployments/examples/openshift-config.yaml
+kubectl delete -f deployments/examples/policy.yaml
 ```
 
 ## Development

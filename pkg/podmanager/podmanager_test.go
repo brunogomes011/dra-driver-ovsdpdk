@@ -50,7 +50,7 @@ var _ = Describe("PodManager", func() {
 
 		It("should return the stored PreparedDevice and true for a known claim UID", func() {
 			uid := k8stypes.UID("uid-1")
-			pd := makePD(uid, "claim-1")
+			pd := makePDs(uid, "claim-1")
 			pm.Set(uid, pd)
 
 			got, found := pm.Get(uid)
@@ -60,7 +60,7 @@ var _ = Describe("PodManager", func() {
 
 		It("should not remove the entry on Get", func() {
 			uid := k8stypes.UID("uid-2")
-			pd := makePD(uid, "claim-2")
+			pd := makePDs(uid, "claim-2")
 			pm.Set(uid, pd)
 
 			pm.Get(uid)
@@ -72,22 +72,22 @@ var _ = Describe("PodManager", func() {
 	Describe("Set", func() {
 		It("should overwrite an existing entry", func() {
 			uid := k8stypes.UID("uid-3")
-			pd1 := makePD(uid, "first")
-			pd2 := makePD(uid, "second")
+			pd1 := makePDs(uid, "first")
+			pd2 := makePDs(uid, "second")
 
 			pm.Set(uid, pd1)
 			pm.Set(uid, pd2)
 
 			got, found := pm.Get(uid)
 			Expect(found).To(BeTrue())
-			Expect(got.ClaimNamespacedName.Name).To(Equal("second"))
+			Expect(got[0].ClaimNamespacedName.Name).To(Equal("second"))
 		})
 
 		It("should store independent entries for different UIDs", func() {
 			uid1 := k8stypes.UID("uid-a")
 			uid2 := k8stypes.UID("uid-b")
-			pd1 := makePD(uid1, "claim-a")
-			pd2 := makePD(uid2, "claim-b")
+			pd1 := makePDs(uid1, "claim-a")
+			pd2 := makePDs(uid2, "claim-b")
 
 			pm.Set(uid1, pd1)
 			pm.Set(uid2, pd2)
@@ -106,7 +106,7 @@ var _ = Describe("PodManager", func() {
 
 		It("should return the PreparedDevice and remove it from the cache", func() {
 			uid := k8stypes.UID("uid-4")
-			pd := makePD(uid, "to-delete")
+			pd := makePDs(uid, "to-delete")
 			pm.Set(uid, pd)
 
 			got := pm.Delete(uid)
@@ -118,7 +118,7 @@ var _ = Describe("PodManager", func() {
 
 		It("should return nil on a second delete of the same UID", func() {
 			uid := k8stypes.UID("uid-5")
-			pm.Set(uid, makePD(uid, "claim-5"))
+			pm.Set(uid, makePDs(uid, "claim-5"))
 			pm.Delete(uid)
 			Expect(pm.Delete(uid)).To(BeNil())
 		})
@@ -132,7 +132,7 @@ var _ = Describe("PodManager", func() {
 
 			for i := range goroutines {
 				uid := k8stypes.UID(k8stypes.UID("uid-concurrent-" + string(rune('A'+i))))
-				pd := makePD(uid, "claim-concurrent")
+				pd := makePDs(uid, "claim-concurrent")
 
 				go func() {
 					defer wg.Done()
@@ -153,7 +153,7 @@ var _ = Describe("PodManager", func() {
 
 			for i := range goroutines {
 				uid := k8stypes.UID("uid-del-" + string(rune('A'+i)))
-				pd := makePD(uid, "claim-del")
+				pd := makePDs(uid, "claim-del")
 				pm.Set(uid, pd)
 
 				go func() {
@@ -170,15 +170,17 @@ var _ = Describe("PodManager", func() {
 	})
 })
 
-// makePD builds a minimal PreparedDevice for testing the pod manager cache.
-func makePD(uid k8stypes.UID, name string) *dratypes.PreparedDevice {
-	return &dratypes.PreparedDevice{
-		ClaimNamespacedName: kubeletplugin.NamespacedObject{
-			NamespacedName: k8stypes.NamespacedName{
-				Name:      name,
-				Namespace: "default",
+// makePDs builds a slice with a single minimal PreparedDevice for testing the pod manager cache.
+func makePDs(uid k8stypes.UID, name string) []*dratypes.PreparedDevice {
+	return []*dratypes.PreparedDevice{
+		{
+			ClaimNamespacedName: kubeletplugin.NamespacedObject{
+				NamespacedName: k8stypes.NamespacedName{
+					Name:      name,
+					Namespace: "default",
+				},
+				UID: uid,
 			},
-			UID: uid,
 		},
 	}
 }
