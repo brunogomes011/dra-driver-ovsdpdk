@@ -23,6 +23,7 @@ import (
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	ovsportv1alpha1 "github.com/amorenoz/dra-driver-ovsdpdk/pkg/api/ovsport/v1alpha1"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/consts"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/flags"
 )
@@ -35,6 +36,7 @@ type Flags struct {
 	CdiRoot                       string
 	KubeletRegistrarDirectoryPath string
 	KubeletPluginsDirectoryPath   string
+	OVSRunDir                     string
 	EnableDeviceMetadata          bool
 	LoggingConfig                 *flags.LoggingConfig
 	KubeClientConfig              flags.KubeClientConfig
@@ -70,6 +72,8 @@ type PreparedDevice struct {
 	Device              kubeletplugin.Device
 	ClaimNamespacedName kubeletplugin.NamespacedObject
 	BridgeName          string
+	OVSPortName         string // name of the OVS port/interface created for this device
 	Mount               MountInfo
 	Socket              SocketInfo
+	PortConfig          *ovsportv1alpha1.OvsPortConfig
 }

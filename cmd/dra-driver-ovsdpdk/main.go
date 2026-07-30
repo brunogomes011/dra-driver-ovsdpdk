@@ -38,6 +38,7 @@ import (
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/devicestate"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/driver"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/flags"
+	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/ovs"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/socketfs"
 	"github.com/amorenoz/dra-driver-ovsdpdk/pkg/types"
 )
@@ -101,6 +102,13 @@ func newApp() *cli.App {
 			Value:       defaultKubeletPluginsDir,
 			Destination: &f.KubeletPluginsDirectoryPath,
 			EnvVars:     []string{"KUBELET_PLUGINS_DIRECTORY_PATH"},
+		},
+		&cli.StringFlag{
+			Name:        "ovs-rundir",
+			Usage:       "Absolute path to the OVS run directory containing db.sock.",
+			Value:       ovs.DefaultOVSRunDir,
+			Destination: &f.OVSRunDir,
+			EnvVars:     []string{"OVS_RUNDIR"},
 		},
 		&cli.BoolFlag{
 			Name:        "enable-device-metadata",
@@ -199,12 +207,18 @@ func run(ctx context.Context, config *types.Config) error {
 		"driverName", consts.DriverName,
 	)
 
+	ovsClient, err := ovs.New(ctx, config.Flags.OVSRunDir)
+	if err != nil {
+		return fmt.Errorf("create OVS client: %w", err)
+	}
+	defer ovsClient.Close()
+
 	cdiHandler, err := cdi.New(config.Flags.CdiRoot)
 	if err != nil {
 		return fmt.Errorf("create DRI Handler: %w", err)
 	}
 
-	devState := devicestate.New(cdiHandler, socketfs.New())
+	devState := devicestate.New(cdiHandler, socketfs.New(), ovsClient)
 
 	driverConfig := driver.Config{
 		NodeName:             config.Flags.NodeName,

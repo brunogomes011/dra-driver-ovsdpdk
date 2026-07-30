@@ -9,6 +9,12 @@ packages:
       outpkg: "mocks"
     interfaces:
       SocketFS:
+  github.com/amorenoz/dra-driver-ovsdpdk/pkg/ovs:
+    config:
+      dir: "pkg/ovs/mocks"
+      outpkg: "mocks"
+    interfaces:
+      Client:
   github.com/amorenoz/dra-driver-ovsdpdk/pkg/devicestate:
     config:
       dir: "pkg/devicestate/mocks"
