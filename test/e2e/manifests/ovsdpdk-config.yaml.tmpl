@@ -8,7 +8,7 @@ metadata:
 spec:
   vhostUser:
     containerRootPath: /var/run/ovsdpdk
-    user: 1001
+    user: {{ .User }}
     group: 107
     aclUsers:
-      - "1001"
+      - "{{ .AclUser }}"

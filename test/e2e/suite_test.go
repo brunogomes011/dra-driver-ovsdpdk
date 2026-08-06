@@ -115,8 +115,10 @@ var _ = BeforeSuite(func() {
 	applyManifest("deviceclass.yaml")
 	DeferCleanup(deleteManifest, "deviceclass.yaml")
 
-	applyManifest("ovsdpdk-config.yaml")
-	DeferCleanup(deleteManifest, "ovsdpdk-config.yaml")
+	cfgYAML := mustRenderManifest("ovsdpdk-config.yaml.tmpl",
+		globalConfigData{plat.configUser, plat.configAclUser})
+	applyYAML(cfgYAML)
+	DeferCleanup(deleteYAML, cfgYAML)
 })
 
 // --- Shared helpers ---

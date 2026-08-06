@@ -34,8 +34,8 @@ import (
 var _ = Describe("ResourceSlice advertisement", func() {
 	BeforeEach(func(ctx SpecContext) {
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{"e2e-rs-policy-worker1", workers[0], []string{"br-dpdk0"}}))
-		waitForDeviceInSlice(ctx, workers[0], "br-dpdk0")
+			policyData{"e2e-rs-policy-worker1", workers[0], []string{plat.bridge0}}))
+		waitForDeviceInSlice(ctx, workers[0], plat.bridge0)
 	})
 
 	It("each worker has at least one ResourceSlice", func(ctx SpecContext) {
@@ -92,32 +92,32 @@ var _ = Describe("ResourceSlice advertisement", func() {
 var _ = Describe("Node selector", func() {
 	BeforeEach(func(ctx SpecContext) {
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{"e2e-ns-policy-worker1", workers[0], []string{"br-dpdk0", "br-dpdk1"}}))
+			policyData{"e2e-ns-policy-worker1", workers[0], []string{plat.bridge0, plat.bridge1}}))
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{"e2e-ns-policy-worker2", workers[1], []string{"br-dpdk2"}}))
-		waitForDeviceInSlice(ctx, workers[0], "br-dpdk0")
-		waitForDeviceInSlice(ctx, workers[0], "br-dpdk1")
-		waitForDeviceInSlice(ctx, workers[1], "br-dpdk2")
+			policyData{"e2e-ns-policy-worker2", workers[1], []string{plat.bridge2}}))
+		waitForDeviceInSlice(ctx, workers[0], plat.bridge0)
+		waitForDeviceInSlice(ctx, workers[0], plat.bridge1)
+		waitForDeviceInSlice(ctx, workers[1], plat.bridge2)
 	})
 
-	It("worker1 advertises br-dpdk0 and br-dpdk1", func(ctx SpecContext) {
+	It("worker1 advertises its configured bridges", func(ctx SpecContext) {
 		nodeSlices, err := resourceSlicesForNode(ctx, workers[0])
 		Expect(err).NotTo(HaveOccurred())
-		Expect(deviceNamesFromSlices(nodeSlices)).To(ContainElements("br-dpdk0", "br-dpdk1"))
+		Expect(deviceNamesFromSlices(nodeSlices)).To(ContainElements(plat.bridge0, plat.bridge1))
 	})
 
-	It("worker2 advertises br-dpdk2 only", func(ctx SpecContext) {
+	It("worker2 advertises only its configured bridge", func(ctx SpecContext) {
 		nodeSlices, err := resourceSlicesForNode(ctx, workers[1])
 		Expect(err).NotTo(HaveOccurred())
 		devices := deviceNamesFromSlices(nodeSlices)
-		Expect(devices).To(ContainElement("br-dpdk2"))
-		Expect(devices).NotTo(ContainElements("br-dpdk0", "br-dpdk1"))
+		Expect(devices).To(ContainElement(plat.bridge2))
+		Expect(devices).NotTo(ContainElements(plat.bridge0, plat.bridge1))
 	})
 
-	It("worker1 does not advertise br-dpdk2", func(ctx SpecContext) {
+	It("worker1 does not advertise worker2 bridges", func(ctx SpecContext) {
 		nodeSlices, err := resourceSlicesForNode(ctx, workers[0])
 		Expect(err).NotTo(HaveOccurred())
-		Expect(deviceNamesFromSlices(nodeSlices)).NotTo(ContainElement("br-dpdk2"))
+		Expect(deviceNamesFromSlices(nodeSlices)).NotTo(ContainElement(plat.bridge2))
 	})
 })
 
@@ -132,9 +132,9 @@ var _ = Describe("Claim lifecycle on worker1", func() {
 
 	BeforeEach(func(ctx SpecContext) {
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{"e2e-lifecycle-policy", workers[0], []string{"br-dpdk0"}}))
-		waitForDeviceInSlice(ctx, workers[0], "br-dpdk0")
-		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{claimName, testNamespace, "br-dpdk0"}))
+			policyData{"e2e-lifecycle-policy", workers[0], []string{plat.bridge0}}))
+		waitForDeviceInSlice(ctx, workers[0], plat.bridge0)
+		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{claimName, testNamespace, plat.bridge0}))
 		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{podName, testNamespace, claimName}))
 		pod = waitForPodRunning(ctx, testNamespace, podName)
 		socketDir = filepath.Join(hostSocketRoot, string(pod.UID)+"_"+claimName+"_vhost-port")
@@ -148,12 +148,12 @@ var _ = Describe("Claim lifecycle on worker1", func() {
 
 	It("socket directory has correct ownership per OvsDpdkConfig", func(ctx SpecContext) {
 		uid, gid := statOwnership(ctx, pod.Spec.NodeName, socketDir)
-		Expect(uid).To(Equal("1001"), "UID should be 1001 (ovsdpdk)")
+		Expect(uid).To(Equal(plat.ovsUID), "UID mismatch")
 		Expect(gid).To(Equal("107"), "GID should be 107 (qemu)")
 	})
 
 	It("socket directory has ACL entry for ovsdpdk user", func(ctx SpecContext) {
-		Expect(hasACLEntry(ctx, pod.Spec.NodeName, socketDir, "user:1001")).To(BeTrue())
+		Expect(hasACLEntry(ctx, pod.Spec.NodeName, socketDir, plat.aclEntry)).To(BeTrue())
 	})
 
 	It("socket directory is removed when pod is deleted", func(ctx SpecContext) {
@@ -172,9 +172,9 @@ var _ = Describe("Claim status", func() {
 
 	It("ResourceClaim.Status.Devices[0].Data is populated after prepare", func(ctx SpecContext) {
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{"e2e-status-policy", workers[0], []string{"br-dpdk0"}}))
-		waitForDeviceInSlice(ctx, workers[0], "br-dpdk0")
-		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{claimName, testNamespace, "br-dpdk0"}))
+			policyData{"e2e-status-policy", workers[0], []string{plat.bridge0}}))
+		waitForDeviceInSlice(ctx, workers[0], plat.bridge0)
+		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{claimName, testNamespace, plat.bridge0}))
 		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{podName, testNamespace, claimName}))
 		waitForPodRunning(ctx, testNamespace, podName)
 
@@ -199,7 +199,6 @@ var _ = Describe("Vhost-user port lifecycle", func() {
 	const (
 		claimName = "e2e-vhost-port"
 		podName   = "e2e-pod-vhost-port"
-		bridge    = "br-dpdk0"
 	)
 
 	var pod *corev1.Pod
@@ -208,9 +207,9 @@ var _ = Describe("Vhost-user port lifecycle", func() {
 
 	BeforeEach(func(ctx SpecContext) {
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{"e2e-vhost-policy", workers[0], []string{bridge}}))
-		waitForDeviceInSlice(ctx, workers[0], bridge)
-		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{claimName, testNamespace, bridge}))
+			policyData{"e2e-vhost-policy", workers[0], []string{plat.bridge0}}))
+		waitForDeviceInSlice(ctx, workers[0], plat.bridge0)
+		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{claimName, testNamespace, plat.bridge0}))
 		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{podName, testNamespace, claimName}))
 		pod = waitForPodRunning(ctx, testNamespace, podName)
 
@@ -231,19 +230,19 @@ var _ = Describe("Vhost-user port lifecycle", func() {
 	})
 
 	It("OVS port is on the correct bridge", func(ctx SpecContext) {
-		got, err := ovsPodExec(ctx, pod.Spec.NodeName, "ovs-vsctl", "port-to-br", ports[0])
+		got, err := ovsExec(ctx, pod.Spec.NodeName, "ovs-vsctl", "port-to-br", ports[0])
 		Expect(err).NotTo(HaveOccurred())
-		Expect(got).To(Equal(bridge))
+		Expect(got).To(Equal(plat.bridge0))
 	})
 
 	It("interface type is dpdkvhostuserclient", func(ctx SpecContext) {
-		got, err := ovsPodExec(ctx, pod.Spec.NodeName, "ovs-vsctl", "get", "interface", ports[0], "type")
+		got, err := ovsExec(ctx, pod.Spec.NodeName, "ovs-vsctl", "get", "interface", ports[0], "type")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).To(Equal("dpdkvhostuserclient"))
 	})
 
 	It("vhost-server-path matches the socket path", func(ctx SpecContext) {
-		got, err := ovsPodExec(ctx, pod.Spec.NodeName,
+		got, err := ovsExec(ctx, pod.Spec.NodeName,
 			"ovs-vsctl", "get", "interface", ports[0], "options:vhost-server-path")
 		Expect(err).NotTo(HaveOccurred())
 		wantDir := filepath.Join(hostSocketRoot, string(pod.UID)+"_"+claimName+"_vhost-port")
@@ -268,7 +267,7 @@ var _ = Describe("Vhost-user port lifecycle", func() {
 			pod1   = "e2e-pod-vhost-multi-1"
 		)
 		for _, name := range []string{claim0, claim1} {
-			applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{name, testNamespace, bridge}))
+			applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{name, testNamespace, plat.bridge0}))
 		}
 		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{pod0, testNamespace, claim0}))
 		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{pod1, testNamespace, claim1}))
@@ -304,25 +303,25 @@ var _ = Describe("Vhost-user port lifecycle", func() {
 var _ = Describe("SELinux label CRD validation", func() {
 	It("valid label is accepted by the API server", func(_ SpecContext) {
 		manifest := mustRenderManifest("ovsdpdkconfig-test.yaml.tmpl",
-			ovsDpdkConfigData{"e2e-selinux-valid", "system_u:object_r:container_file_t:s0"})
+			ovsDpdkConfigData{"e2e-selinux-valid", "system_u:object_r:container_file_t:s0", plat.testCfgUser, plat.testCfgGroup})
 		applyAndCleanup(manifest)
 	})
 
 	It("label missing a component is rejected", func(_ SpecContext) {
 		manifest := mustRenderManifest("ovsdpdkconfig-test.yaml.tmpl",
-			ovsDpdkConfigData{"e2e-selinux-invalid-short", "system_u:object_r:container_file_t"})
+			ovsDpdkConfigData{"e2e-selinux-invalid-short", "system_u:object_r:container_file_t", plat.testCfgUser, plat.testCfgGroup})
 		Expect(tryApplyYAML(manifest)).To(HaveOccurred())
 	})
 
 	It("label with an empty component is rejected", func(_ SpecContext) {
 		manifest := mustRenderManifest("ovsdpdkconfig-test.yaml.tmpl",
-			ovsDpdkConfigData{"e2e-selinux-invalid-empty", "system_u::container_file_t:s0"})
+			ovsDpdkConfigData{"e2e-selinux-invalid-empty", "system_u::container_file_t:s0", plat.testCfgUser, plat.testCfgGroup})
 		Expect(tryApplyYAML(manifest)).To(HaveOccurred())
 	})
 
 	It("label with no colons is rejected", func(_ SpecContext) {
 		manifest := mustRenderManifest("ovsdpdkconfig-test.yaml.tmpl",
-			ovsDpdkConfigData{"e2e-selinux-invalid-plain", "badlabel"})
+			ovsDpdkConfigData{"e2e-selinux-invalid-plain", "badlabel", plat.testCfgUser, plat.testCfgGroup})
 		Expect(tryApplyYAML(manifest)).To(HaveOccurred())
 	})
 })
@@ -331,7 +330,6 @@ var _ = Describe("Single claim with multiple requests", func() {
 	const (
 		claimName = "e2e-multi-request"
 		podName   = "e2e-pod-multi-request"
-		bridge    = "br-dpdk0"
 		nPorts    = 2
 	)
 
@@ -347,10 +345,10 @@ var _ = Describe("Single claim with multiple requests", func() {
 
 	BeforeEach(func(ctx SpecContext) {
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{"e2e-multi-req-policy", workers[0], []string{bridge}}))
-		waitForDeviceInSlice(ctx, workers[0], bridge)
+			policyData{"e2e-multi-req-policy", workers[0], []string{plat.bridge0}}))
+		waitForDeviceInSlice(ctx, workers[0], plat.bridge0)
 		applyAndCleanup(mustRenderManifest("claim-multi-request.yaml.tmpl",
-			multiRequestClaimData{claimName, testNamespace, bridge, portNames}))
+			multiRequestClaimData{claimName, testNamespace, plat.bridge0, portNames}))
 		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{podName, testNamespace, claimName}))
 		pod = waitForPodRunning(ctx, testNamespace, podName)
 	})
@@ -415,10 +413,10 @@ var _ = Describe("Multiple ports from same bridge in one pod", func() {
 
 	BeforeEach(func(ctx SpecContext) {
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{"e2e-multi-port-policy", workers[0], []string{"br-dpdk0"}}))
-		waitForDeviceInSlice(ctx, workers[0], "br-dpdk0")
+			policyData{"e2e-multi-port-policy", workers[0], []string{plat.bridge0}}))
+		waitForDeviceInSlice(ctx, workers[0], plat.bridge0)
 		for _, name := range claimNames {
-			applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{name, testNamespace, "br-dpdk0"}))
+			applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", claimData{name, testNamespace, plat.bridge0}))
 		}
 		applyAndCleanup(mustRenderManifest("pod-multi-claim.yaml.tmpl",
 			multiClaimPodData{podName, testNamespace, claimNames}))
@@ -543,13 +541,15 @@ var _ = Describe("Bridge hot-plug", func() {
 
 var _ = Describe("Topology Device Plugin", func() {
 	const (
-		bridge           = "br-dpdk0"
-		dpdkPort         = "dpdk-topo0"
-		topologyResource = "ovsdpdk.k8snetworkplumbingwg.io/topology-br-dpdk0"
-		policyName       = "e2e-topology-policy"
+		dpdkPort   = "dpdk-topo0"
+		policyName = "e2e-topology-policy"
 	)
 
+	var bridge, topologyResource string
+
 	BeforeEach(func() {
+		bridge = plat.topoBridge
+		topologyResource = driverName + "/topology-" + plat.topoBridge
 		if topologyPCI == "" {
 			Skip("topology tests require TOPOLOGY_PCI env var")
 		}
@@ -642,19 +642,19 @@ var _ = Describe("Topology Device Plugin", func() {
 var _ = Describe("MTU CRD validation", func() {
 	It("valid mtu is accepted by the API server", func(_ SpecContext) {
 		manifest := mustRenderManifest("policy-with-mtu.yaml.tmpl",
-			mtuPolicyData{"e2e-mtu-valid", workers[0], "br-dpdk0", 9000})
+			mtuPolicyData{"e2e-mtu-valid", workers[0], plat.bridge0, 9000})
 		applyAndCleanup(manifest)
 	})
 
 	It("mtu below 68 is rejected by the API server", func(_ SpecContext) {
 		manifest := mustRenderManifest("policy-with-mtu.yaml.tmpl",
-			mtuPolicyData{"e2e-mtu-too-small", workers[0], "br-dpdk0", 67})
+			mtuPolicyData{"e2e-mtu-too-small", workers[0], plat.bridge0, 67})
 		Expect(tryApplyYAML(manifest)).To(HaveOccurred())
 	})
 
 	It("mtu above 65535 is rejected by the API server", func(_ SpecContext) {
 		manifest := mustRenderManifest("policy-with-mtu.yaml.tmpl",
-			mtuPolicyData{"e2e-mtu-too-large", workers[0], "br-dpdk0", 65536})
+			mtuPolicyData{"e2e-mtu-too-large", workers[0], plat.bridge0, 65536})
 		Expect(tryApplyYAML(manifest)).To(HaveOccurred())
 	})
 })
@@ -663,7 +663,6 @@ var _ = Describe("MTU", Ordered, func() {
 	const (
 		claimName = "e2e-mtu-claim"
 		podName   = "e2e-mtu-pod"
-		bridge    = "br-dpdk0"
 		mtu       = 9000
 	)
 
@@ -673,11 +672,11 @@ var _ = Describe("MTU", Ordered, func() {
 
 	BeforeAll(func(ctx SpecContext) {
 		applyAndCleanup(mustRenderManifest("policy-with-mtu.yaml.tmpl",
-			mtuPolicyData{"e2e-mtu-policy", workers[0], bridge, mtu}))
-		waitForDeviceInSlice(ctx, workers[0], bridge)
+			mtuPolicyData{"e2e-mtu-policy", workers[0], plat.bridge0, mtu}))
+		waitForDeviceInSlice(ctx, workers[0], plat.bridge0)
 
 		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl",
-			claimData{claimName, testNamespace, bridge}))
+			claimData{claimName, testNamespace, plat.bridge0}))
 		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl",
 			podData{podName, testNamespace, claimName}))
 		pod = waitForPodRunning(ctx, testNamespace, podName)
@@ -701,16 +700,16 @@ var _ = Describe("MTU", Ordered, func() {
 		var found bool
 		for _, s := range nodeSlices {
 			for _, d := range s.Spec.Devices {
-				if d.Name == bridge {
+				if d.Name == plat.bridge0 {
 					attr, ok := d.Attributes[attrKey]
-					Expect(ok).To(BeTrue(), "mtu attribute missing on device %s", bridge)
+					Expect(ok).To(BeTrue(), "mtu attribute missing on device %s", plat.bridge0)
 					Expect(attr.IntValue).NotTo(BeNil())
 					Expect(*attr.IntValue).To(Equal(int64(mtu)))
 					found = true
 				}
 			}
 		}
-		Expect(found).To(BeTrue(), "device %s not found in ResourceSlices", bridge)
+		Expect(found).To(BeTrue(), "device %s not found in ResourceSlices", plat.bridge0)
 	})
 
 	It("mtu_request is set on the OVS interface", func(ctx SpecContext) {
@@ -740,13 +739,12 @@ var _ = Describe("MTU absent", func() {
 		const (
 			plainClaimName = "e2e-mtu-absent-claim"
 			plainPodName   = "e2e-mtu-absent-pod"
-			bridge         = "br-dpdk1"
 		)
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{"e2e-mtu-absent-policy", workers[0], []string{bridge}}))
-		waitForDeviceInSlice(ctx, workers[0], bridge)
+			policyData{"e2e-mtu-absent-policy", workers[0], []string{plat.bridge1}}))
+		waitForDeviceInSlice(ctx, workers[0], plat.bridge1)
 		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl",
-			claimData{plainClaimName, testNamespace, bridge}))
+			claimData{plainClaimName, testNamespace, plat.bridge1}))
 		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl",
 			podData{plainPodName, testNamespace, plainClaimName}))
 		plainPod := waitForPodRunning(ctx, testNamespace, plainPodName)
@@ -772,7 +770,6 @@ var _ = Describe("Ingress policing", Ordered, func() {
 	const (
 		claimName = "e2e-policing"
 		podName   = "e2e-pod-policing"
-		bridge    = "br-dpdk0"
 	)
 
 	var pod *corev1.Pod
@@ -781,13 +778,13 @@ var _ = Describe("Ingress policing", Ordered, func() {
 
 	BeforeAll(func(ctx SpecContext) {
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{"e2e-policing-policy", workers[0], []string{bridge}}))
-		waitForDeviceInSlice(ctx, workers[0], bridge)
+			policyData{"e2e-policing-policy", workers[0], []string{plat.bridge0}}))
+		waitForDeviceInSlice(ctx, workers[0], plat.bridge0)
 		applyAndCleanup(mustRenderManifest("claim-with-policing.yaml.tmpl",
 			policingClaimData{
 				Name:       claimName,
 				Namespace:  testNamespace,
-				BridgeName: bridge,
+				BridgeName: plat.bridge0,
 				MaxRate:    100000, // 100 Mbps in kbps
 				Burst:      10000,  // 10 Mb in kb
 			}))
@@ -837,13 +834,12 @@ var _ = Describe("Ingress policing absent", func() {
 		const (
 			plainClaimName = "e2e-policing-absent"
 			plainPodName   = "e2e-pod-policing-absent"
-			bridge         = "br-dpdk0"
 		)
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{"e2e-policing-absent-policy", workers[0], []string{bridge}}))
-		waitForDeviceInSlice(ctx, workers[0], bridge)
+			policyData{"e2e-policing-absent-policy", workers[0], []string{plat.bridge0}}))
+		waitForDeviceInSlice(ctx, workers[0], plat.bridge0)
 		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl",
-			claimData{plainClaimName, testNamespace, bridge}))
+			claimData{plainClaimName, testNamespace, plat.bridge0}))
 		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl",
 			podData{plainPodName, testNamespace, plainClaimName}))
 		plainPod := waitForPodRunning(ctx, testNamespace, plainPodName)
@@ -869,17 +865,16 @@ var _ = Describe("Checkpoint persistence across driver restart", func() {
 	const (
 		claimName = "e2e-persist-claim"
 		podName   = "e2e-persist-pod"
-		bridge    = "br-dpdk0"
 	)
 
 	It("unprepare cleans up OVS port and socket dir after driver restart", func(ctx SpecContext) {
 		nodeName := workers[0]
 
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{"e2e-persist-policy", nodeName, []string{bridge}}))
-		waitForDeviceInSlice(ctx, nodeName, bridge)
+			policyData{"e2e-persist-policy", nodeName, []string{plat.bridge0}}))
+		waitForDeviceInSlice(ctx, nodeName, plat.bridge0)
 		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl",
-			claimData{claimName, testNamespace, bridge}))
+			claimData{claimName, testNamespace, plat.bridge0}))
 		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl",
 			podData{podName, testNamespace, claimName}))
 		pod := waitForPodRunning(ctx, testNamespace, podName)
@@ -898,7 +893,7 @@ var _ = Describe("Checkpoint persistence across driver restart", func() {
 
 		By("Restarting the driver pod on " + nodeName)
 		restartDriverOnNode(ctx, nodeName)
-		waitForDeviceInSlice(ctx, nodeName, bridge)
+		waitForDeviceInSlice(ctx, nodeName, plat.bridge0)
 
 		By("Deleting the test pod to trigger unprepare after restart")
 		deletePodAndWait(ctx, testNamespace, podName)

@@ -72,7 +72,11 @@ type podData struct {
 }
 
 type ovsDpdkConfigData struct {
-	Name, SelinuxLabel string
+	Name, SelinuxLabel, User, Group string
+}
+
+type globalConfigData struct {
+	User, AclUser string
 }
 
 type multiClaimPodData struct {
@@ -237,10 +241,26 @@ func ovsPodExec(ctx context.Context, nodeName string, args ...string) (string, e
 	return kubectlExec(ctx, driverNamespace, pods.Items[0].Name, "ovs-vswitchd", args...)
 }
 
+// ovsNodeExec runs a command on an OpenShift node via "oc debug node/".
+func ovsNodeExec(ctx context.Context, nodeName string, args ...string) (string, error) {
+	ocArgs := []string{"debug", "node/" + nodeName, "--"}
+	chrootArgs := append([]string{"chroot", "/host"}, args...)
+	ocArgs = append(ocArgs, chrootArgs...)
+
+	var out, errOut bytes.Buffer
+	cmd := exec.CommandContext(ctx, "oc", ocArgs...)
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("oc debug node/%s %v: %w\n%s", nodeName, args, err, errOut.String())
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
 // --- OVS helpers ---
 
 func ovsPortsForClaim(ctx context.Context, nodeName, claimUID string) ([]string, error) {
-	out, err := ovsPodExec(ctx, nodeName,
+	out, err := ovsExec(ctx, nodeName,
 		"ovs-vsctl", "--columns=name", "--bare",
 		"find", "port", "external_ids:claim-uid="+claimUID)
 	if err != nil {
@@ -261,19 +281,19 @@ func ovsPortsForClaim(ctx context.Context, nodeName, claimUID string) ([]string,
 
 // ovsInterfaceGet returns the value of a single column on an OVS Interface row.
 func ovsInterfaceGet(ctx context.Context, nodeName, portName, column string) (string, error) {
-	return ovsPodExec(ctx, nodeName, "ovs-vsctl", "get", "interface", portName, column)
+	return ovsExec(ctx, nodeName, "ovs-vsctl", "get", "interface", portName, column)
 }
 
 func addBridgeToOVS(ctx context.Context, nodeName, bridgeName string) {
 	GinkgoHelper()
-	_, err := ovsPodExec(ctx, nodeName,
+	_, err := ovsExec(ctx, nodeName,
 		"ovs-vsctl", "--may-exist", "add-br", bridgeName,
 		"--", "set", "bridge", bridgeName, "datapath_type=netdev")
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "add bridge %s", bridgeName)
 }
 
 func deleteBridgeFromOVS(ctx context.Context, nodeName, bridgeName string) {
-	_, _ = ovsPodExec(ctx, nodeName,
+	_, _ = ovsExec(ctx, nodeName,
 		"ovs-vsctl", "--if-exists", "del-br", bridgeName)
 }
 
@@ -294,7 +314,7 @@ func statOwnership(ctx context.Context, nodeName, path string) (uid, gid string)
 }
 
 func hasACLEntry(ctx context.Context, nodeName, path, entry string) bool {
-	out, err := driverPodExec(ctx, nodeName, "getfacl", path)
+	out, err := driverPodExec(ctx, nodeName, "getfacl", "-n", path)
 	if err != nil {
 		return false
 	}
@@ -359,7 +379,7 @@ func deletePodAndWait(ctx context.Context, namespace, name string) {
 
 func addDPDKPort(ctx context.Context, nodeName, bridge, portName, pciAddr string) {
 	GinkgoHelper()
-	_, err := ovsPodExec(ctx, nodeName,
+	_, err := ovsExec(ctx, nodeName,
 		"ovs-vsctl", "add-port", bridge, portName,
 		"--", "set", "interface", portName,
 		"type=dpdk", "options:dpdk-devargs="+pciAddr)
@@ -367,7 +387,7 @@ func addDPDKPort(ctx context.Context, nodeName, bridge, portName, pciAddr string
 }
 
 func removeDPDKPort(ctx context.Context, nodeName, portName string) {
-	_, _ = ovsPodExec(ctx, nodeName,
+	_, _ = ovsExec(ctx, nodeName,
 		"ovs-vsctl", "--if-exists", "del-port", portName)
 }
 

@@ -5,8 +5,8 @@ metadata:
 spec:
   vhostUser:
     containerRootPath: /var/run/ovsdpdk
-    user: 0
-    group: 0
+    user: {{ .User }}
+    group: {{ .Group }}
 {{- if .SelinuxLabel }}
     selinuxLabel: {{ .SelinuxLabel }}
 {{- end }}

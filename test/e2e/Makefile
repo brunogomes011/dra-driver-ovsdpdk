@@ -54,7 +54,7 @@ export KUBEVIRTCI_CONFIG_PATH=$(KUBEVIRTCI_CONFIG_PATH) \
        CONTAINER_HOST=unix:///run/podman/podman.sock
 endef
 
-.PHONY: test build-ovs-image deploy-ovs \
+.PHONY: test test-openshift build-ovs-image deploy-ovs \
 	cluster-up cluster-down cluster-kubeconfig podman-check \
 	cluster-up-kind cluster-down-kind
 
@@ -66,6 +66,9 @@ endef
 #   TOPOLOGY_PCI  — PCI address of a virtio NIC on worker1; enables topology tests.
 test:
 	go test -count=1 -v -timeout $(E2E_TIMEOUT) .
+
+test-openshift:
+	E2E_PLATFORM=openshift $(MAKE) test E2E_TIMEOUT=60m
 
 # --- OVS deployment ----------------------------------------------------------
 
