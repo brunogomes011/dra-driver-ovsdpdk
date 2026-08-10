@@ -6,6 +6,9 @@ metadata:
 spec:
   restartPolicy: Never
   terminationGracePeriodSeconds: 1
+{{- if .NodeName }}
+  nodeName: {{ .NodeName }}
+{{- end }}
   resourceClaims:
     - name: vhost
       resourceClaimName: {{ .ClaimName }}
@@ -17,3 +20,7 @@ spec:
       resources:
         claims:
           - name: vhost
+{{- if .TopologyResource }}
+        requests:
+          {{ .TopologyResource }}: "1"
+{{- end }}

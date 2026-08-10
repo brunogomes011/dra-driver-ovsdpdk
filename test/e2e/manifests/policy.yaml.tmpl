@@ -16,4 +16,10 @@ spec:
   bridges:
 {{- range .Bridges }}
     - name: {{ . }}
+{{- if $.Mtu }}
+      mtu: {{ $.Mtu }}
+{{- end }}
+{{- if $.TopologyResource }}
+      topologyResource: {{ $.TopologyResource }}
+{{- end }}
 {{- end }}

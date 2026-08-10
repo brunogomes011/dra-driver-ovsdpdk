@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"text/template"
 	"time"
@@ -63,16 +64,35 @@ func mustRenderManifest(name string, data any) string {
 
 // --- Template data types ---
 
+// claimData renders claim.yaml.tmpl. Count, Vlan, MaxRate/Burst and
+// ApplyToAll are all optional — a zero-value claimData renders a plain
+// single-request claim with no config block.
+//
+// Vlan is a *int (rather than int) so that an explicit vlan of 0 can be
+// distinguished from "no vlan configured": Go templates treat a non-nil
+// pointer as truthy even when it points at the zero value.
 type claimData struct {
 	Name, Namespace, BridgeName string
+	Count                       int  // 0 omits the count field (defaults to 1)
+	Vlan                        *int // nil omits vlan from the config block
+	MaxRate, Burst              uint32
+	ApplyToAll                  bool // omit the config entry's "requests" list
+}
+
+// HasConfig reports whether the rendered claim needs a config block at all.
+func (c claimData) HasConfig() bool {
+	return c.Vlan != nil || c.MaxRate != 0
 }
 
 type unknownClassClaimData struct {
 	Name, Namespace, DeviceClassName string
 }
 
+// podData renders pod.yaml.tmpl. NodeName and TopologyResource are optional.
 type podData struct {
 	Name, Namespace, ClaimName string
+	NodeName                   string
+	TopologyResource           string
 }
 
 type ovsDpdkConfigData struct {
@@ -93,40 +113,19 @@ type multiRequestClaimData struct {
 	Ports                       []string
 }
 
-type policingClaimData struct {
-	Name, Namespace, BridgeName string
-	MaxRate                     uint32
-	Burst                       uint32 // 0 means omit from manifest
-}
-
-type portConfigClaimData struct {
-	Name, Namespace, BridgeName string
-	Vlan                        int
-	MaxRate                     uint32
-	Burst                       uint32 // 0 means omit from manifest
-}
-
+// policyData renders policy.yaml.tmpl. Mtu and TopologyResource are
+// optional and apply to every bridge in Bridges (in practice only ever
+// used with a single bridge).
 type policyData struct {
-	Name      string
-	NodeNames []string
-	Bridges   []string
-}
-
-type topologyPolicyData struct {
-	Name, NodeName, BridgeName, TopologyResource string
-}
-
-type mtuPolicyData struct {
-	Name, NodeName, BridgeName string
-	Mtu                        int
+	Name             string
+	NodeNames        []string
+	Bridges          []string
+	Mtu              *int
+	TopologyResource string
 }
 
 type claimTemplatePodData struct {
 	Name, Namespace, PodClaimName, TemplateName string
-}
-
-type topologyPodData struct {
-	Name, Namespace, ClaimName, TopologyResource string
 }
 
 type requestBridgePair struct {
@@ -138,24 +137,14 @@ type multiBridgeClaimData struct {
 	Requests        []requestBridgePair
 }
 
-type countClaimData struct {
-	Name, Namespace, BridgeName string
-	Count                       int
-}
-
-type podWithNodeData struct {
-	Name, Namespace, ClaimName, NodeName string
-}
-
-type vlanClaimData struct {
-	Name, Namespace, BridgeName string
-	Vlan                        int
-}
-
 type vlanOverrideClaimData struct {
 	Name, Namespace, BridgeName string
 	SpecificVlan, GlobalVlan    int
 }
+
+// intPtr returns a pointer to v, useful for optional *int template fields
+// where the zero value is a meaningful, non-omitted setting (e.g. vlan 0).
+func intPtr(v int) *int { return &v }
 
 // --- kubectl manifest apply/delete ---
 //
@@ -326,6 +315,31 @@ func ovsPortsForClaim(ctx context.Context, nodeName, claimUID string) ([]string,
 // ovsInterfaceGet returns the value of a single column on an OVS Interface row.
 func ovsInterfaceGet(ctx context.Context, nodeName, portName, column string) (string, error) {
 	return ovsExec(ctx, nodeName, "ovs-vsctl", "get", "interface", portName, column)
+}
+
+// ovsPortGet returns the value of a single column on an OVS Port row.
+func ovsPortGet(ctx context.Context, nodeName, portName, column string) (string, error) {
+	return ovsExec(ctx, nodeName, "ovs-vsctl", "get", "port", portName, column)
+}
+
+// waitForOvsPorts polls until at least one OVS port exists for claimUID and
+// returns the port names.
+func waitForOvsPorts(ctx context.Context, nodeName, claimUID string) []string {
+	GinkgoHelper()
+	var ports []string
+	EventuallyWithOffset(1, func(g Gomega) {
+		p, err := ovsPortsForClaim(ctx, nodeName, claimUID)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(p).NotTo(BeEmpty())
+		ports = p
+	}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+	return ports
+}
+
+// socketDirPath returns the host path of the per-request vhost-user socket
+// directory the driver creates for a claim.
+func socketDirPath(podUID, claimName, requestName string) string {
+	return filepath.Join(hostSocketRoot, podUID+"_"+claimName+"_"+requestName)
 }
 
 func addBridgeToOVS(ctx context.Context, nodeName, bridgeName string) {

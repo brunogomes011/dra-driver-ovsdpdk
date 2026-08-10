@@ -54,21 +54,40 @@ export KUBEVIRTCI_CONFIG_PATH=$(KUBEVIRTCI_CONFIG_PATH) \
        CONTAINER_HOST=unix:///run/podman/podman.sock
 endef
 
-.PHONY: test test-openshift build-ovs-image deploy-ovs \
-	cluster-up cluster-down cluster-kubeconfig podman-check \
-	cluster-up-kind cluster-down-kind
+  .PHONY: test test-openshift test-tier1 test-tier2 \
+        test-tier1-openshift test-tier2-openshift \
+        build-ovs-image deploy-ovs \
+        cluster-up cluster-down cluster-kubeconfig podman-check \
+        cluster-up-kind cluster-down-kind
 
-# --- Test -------------------------------------------------------------------
+  # --- Test -------------------------------------------------------------------
 
-# Run e2e tests.  Expects the driver and OVS to be deployed and KUBECONFIG set.
-#
-# Optional env vars:
-#   TOPOLOGY_PCI  — PCI address of a virtio NIC on worker1; enables topology tests.
+  # Run e2e tests.  Expects the driver and OVS to be deployed and KUBECONFIG set.
+  #
+  # Optional env vars:
+  #   TOPOLOGY_PCI  — PCI address of a virtio NIC on worker1; enables topology tests.
+  #   GINKGO_ARGS   — extra args passed to `go test`, e.g. a --ginkgo.label-filter.
 test:
-	go test -count=1 -v -timeout $(E2E_TIMEOUT) .
+	go test -count=1 -v -timeout $(E2E_TIMEOUT) . $(GINKGO_ARGS)
 
 test-openshift:
-	E2E_PLATFORM=openshift $(MAKE) test E2E_TIMEOUT=60m
+	E2E_PLATFORM=openshift $(MAKE) test E2E_TIMEOUT=60m GINKGO_ARGS='$(GINKGO_ARGS)'
+
+# --- Tiered subsets (upstream/kind) ------------------------------------------
+
+test-tier1:
+	$(MAKE) test GINKGO_ARGS='-args --ginkgo.label-filter="tier1"'
+
+test-tier2:
+	$(MAKE) test GINKGO_ARGS='-args --ginkgo.label-filter="tier2"'
+
+# --- Tiered subsets (OpenShift) -----------------------------------------------
+
+test-openshift-tier1:
+	$(MAKE) test-openshift GINKGO_ARGS='-args --ginkgo.label-filter="tier1"'
+
+test-openshift-tier2:
+	$(MAKE) test-openshift GINKGO_ARGS='-args --ginkgo.label-filter="tier2"'
 
 # --- OVS deployment ----------------------------------------------------------
 

@@ -9,8 +9,33 @@ spec:
       - name: vhost-port
         exactly:
           deviceClassName: ovsdpdk
+{{- if .Count }}
+          count: {{ .Count }}
+{{- end }}
 {{- if .BridgeName }}
           selectors:
             - cel:
                 expression: 'device.attributes["ovsdpdk.k8snetworkplumbingwg.io"].bridgeName == "{{ .BridgeName }}"'
+{{- end }}
+{{- if .HasConfig }}
+    config:
+      - opaque:
+          driver: ovsdpdk.k8snetworkplumbingwg.io
+          parameters:
+            apiVersion: ovsdpdk.k8snetworkplumbingwg.io/v1alpha1
+            kind: OvsPortConfig
+{{- if .Vlan }}
+            vlan: {{ .Vlan }}
+{{- end }}
+{{- if .MaxRate }}
+            policing:
+              max_rate: {{ .MaxRate }}
+{{- if .Burst }}
+              burst: {{ .Burst }}
+{{- end }}
+{{- end }}
+{{- if not .ApplyToAll }}
+        requests:
+          - vhost-port
+{{- end }}
 {{- end }}
