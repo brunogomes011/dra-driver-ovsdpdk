@@ -1,0 +1,11 @@
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace }}
+spec:
+  devices:
+    requests:
+      - name: vhost-port
+        exactly:
+          deviceClassName: {{ .DeviceClassName }}

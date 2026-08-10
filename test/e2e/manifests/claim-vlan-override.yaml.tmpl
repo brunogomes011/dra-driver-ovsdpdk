@@ -1,0 +1,32 @@
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace }}
+spec:
+  devices:
+    requests:
+      - name: vhost-port
+        exactly:
+          deviceClassName: ovsdpdk
+          selectors:
+            - cel:
+                expression: 'device.attributes["ovsdpdk.k8snetworkplumbingwg.io"].bridgeName == "{{ .BridgeName }}"'
+    config:
+      # Listed first: the driver takes the first config entry whose Requests
+      # is empty or contains the request name, so a request-specific entry
+      # must precede the apply-to-all entry in order to take precedence.
+      - requests:
+          - vhost-port
+        opaque:
+          driver: ovsdpdk.k8snetworkplumbingwg.io
+          parameters:
+            apiVersion: ovsdpdk.k8snetworkplumbingwg.io/v1alpha1
+            kind: OvsPortConfig
+            vlan: {{ .SpecificVlan }}
+      - opaque:
+          driver: ovsdpdk.k8snetworkplumbingwg.io
+          parameters:
+            apiVersion: ovsdpdk.k8snetworkplumbingwg.io/v1alpha1
+            kind: OvsPortConfig
+            vlan: {{ .GlobalVlan }}

@@ -67,6 +67,10 @@ type claimData struct {
 	Name, Namespace, BridgeName string
 }
 
+type unknownClassClaimData struct {
+	Name, Namespace, DeviceClassName string
+}
+
 type podData struct {
 	Name, Namespace, ClaimName string
 }
@@ -95,9 +99,17 @@ type policingClaimData struct {
 	Burst                       uint32 // 0 means omit from manifest
 }
 
+type portConfigClaimData struct {
+	Name, Namespace, BridgeName string
+	Vlan                        int
+	MaxRate                     uint32
+	Burst                       uint32 // 0 means omit from manifest
+}
+
 type policyData struct {
-	Name, NodeName string
-	Bridges        []string
+	Name      string
+	NodeNames []string
+	Bridges   []string
 }
 
 type topologyPolicyData struct {
@@ -109,8 +121,40 @@ type mtuPolicyData struct {
 	Mtu                        int
 }
 
+type claimTemplatePodData struct {
+	Name, Namespace, PodClaimName, TemplateName string
+}
+
 type topologyPodData struct {
 	Name, Namespace, ClaimName, TopologyResource string
+}
+
+type requestBridgePair struct {
+	Name, BridgeName string
+}
+
+type multiBridgeClaimData struct {
+	Name, Namespace string
+	Requests        []requestBridgePair
+}
+
+type countClaimData struct {
+	Name, Namespace, BridgeName string
+	Count                       int
+}
+
+type podWithNodeData struct {
+	Name, Namespace, ClaimName, NodeName string
+}
+
+type vlanClaimData struct {
+	Name, Namespace, BridgeName string
+	Vlan                        int
+}
+
+type vlanOverrideClaimData struct {
+	Name, Namespace, BridgeName string
+	SpecificVlan, GlobalVlan    int
 }
 
 // --- kubectl manifest apply/delete ---

@@ -10,7 +10,9 @@ spec:
           - key: kubernetes.io/hostname
             operator: In
             values:
-              - {{ .NodeName }}
+{{- range .NodeNames }}
+              - {{ . }}
+{{- end }}
   bridges:
 {{- range .Bridges }}
     - name: {{ . }}
