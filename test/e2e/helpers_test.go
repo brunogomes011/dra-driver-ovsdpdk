@@ -24,7 +24,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -68,20 +70,36 @@ func mustRenderManifest(name string, data any) string {
 // ApplyToAll are all optional — a zero-value claimData renders a plain
 // single-request claim with no config block.
 //
-// Vlan is a *int (rather than int) so that an explicit vlan of 0 can be
-// distinguished from "no vlan configured": Go templates treat a non-nil
-// pointer as truthy even when it points at the zero value.
+// Vlan and MaxRate are pointers (rather than plain int/uint32) so that an
+// explicit zero value can be distinguished from "not configured": Go
+// templates treat a non-nil pointer as truthy even when it points at the
+// zero value, which lets tests exercise "vlan 0" or "max_rate 0" (meaning
+// unlimited) as distinct from omitting the field entirely. Burst has no
+// such case in practice (0 always means "not set") so it stays a plain
+// uint32.
 type claimData struct {
 	Name, Namespace, BridgeName string
-	Count                       int  // 0 omits the count field (defaults to 1)
-	Vlan                        *int // nil omits vlan from the config block
-	MaxRate, Burst              uint32
-	ApplyToAll                  bool // omit the config entry's "requests" list
+	Count                       int     // 0 omits the count field (defaults to 1)
+	Vlan                        *int    // nil omits vlan from the config block
+	MaxRate                     *uint32 // nil omits max_rate from the policing block
+	Burst                       uint32  // 0 omits burst from the policing block
+	ApplyToAll                  bool    // omit the config entry's "requests" list
+
+	// ConfigKind/ConfigAPIVersion override the opaque config's kind/apiVersion
+	// (normally "OvsPortConfig"/"ovsdpdk.k8snetworkplumbingwg.io/v1alpha1").
+	// Only useful for exercising the driver's rejection of an unexpected
+	// kind/apiVersion — leave empty to get the real values.
+	ConfigKind, ConfigAPIVersion string
+}
+
+// HasPolicing reports whether the rendered claim needs a policing block.
+func (c claimData) HasPolicing() bool {
+	return c.MaxRate != nil || c.Burst != 0
 }
 
 // HasConfig reports whether the rendered claim needs a config block at all.
 func (c claimData) HasConfig() bool {
-	return c.Vlan != nil || c.MaxRate != 0
+	return c.Vlan != nil || c.HasPolicing() || c.ConfigKind != "" || c.ConfigAPIVersion != ""
 }
 
 type unknownClassClaimData struct {
@@ -92,15 +110,32 @@ type unknownClassClaimData struct {
 type podData struct {
 	Name, Namespace, ClaimName string
 	NodeName                   string
+	NodeSelector               map[string]string
 	TopologyResource           string
 }
 
+// ovsDpdkConfigData renders ovsdpdk-config.yaml.tmpl. ContainerRootPath is
+// optional — empty uses the real default (/var/run/ovsdpdk); only useful
+// for exercising a custom mount path. AclUsers is a list since the CRD
+// field itself is a list (aclUsers:), even though most tests only ever need
+// one entry.
 type ovsDpdkConfigData struct {
-	Name, SelinuxLabel, User, Group string
+	Name, SelinuxLabel, User, Group, ContainerRootPath string
+	AclUsers                                           []string
 }
 
-type globalConfigData struct {
-	User, AclUser string
+// defaultOvsDpdkConfigData returns the ovsDpdkConfigData for the "default"
+// OvsDpdkConfig every test in this suite relies on (the driver only watches
+// the object named "default"). Tests that temporarily mutate it must
+// restore this exact value afterwards — see e2e_ovsdpdkconfig_test.go.
+func defaultOvsDpdkConfigData() ovsDpdkConfigData {
+	return ovsDpdkConfigData{
+		Name:         "default",
+		SelinuxLabel: plat.selinuxLabel,
+		User:         plat.configUser,
+		Group:        plat.configGroup,
+		AclUsers:     []string{plat.configAclUser},
+	}
 }
 
 type multiClaimPodData struct {
@@ -142,9 +177,40 @@ type vlanOverrideClaimData struct {
 	SpecificVlan, GlobalVlan    int
 }
 
+// vmInterfaceData describes one additional (non-default) VM network
+// interface bound to a DRA ResourceClaimTemplate via the vhostuser binding.
+type vmInterfaceData struct {
+	Name         string // network/interface name
+	ClaimRefName string // spec.resourceClaims[].name referenced by the network
+	TemplateName string // ResourceClaimTemplate to bind
+}
+
+// vmData renders vm-dra.yaml.tmpl. The default masquerade interface is
+// always guest ifname eth0, so Interfaces[i] lands on eth<i+1> — see
+// guestInterfaceName. CPUCount is optional; 0 renders as a single vCPU.
+type vmData struct {
+	Name, Namespace, NodeName string
+	Image                     string // containerDisk image; set from $E2E_VM_IMAGE (vmImage)
+	CPUCount                  int
+	HugepageSize              string // e.g. "2Mi"; empty backs the VM with regular (non-huge) memory
+	Interfaces                []vmInterfaceData
+}
+
+// guestInterfaceName returns the guest-visible interface name for the i-th
+// (0-indexed) entry in vmData.Interfaces.
+//todo: Identify the interface name correctly
+func guestInterfaceName(i int) string {
+	return fmt.Sprintf("enp%ds0", i+2)
+}
+
 // intPtr returns a pointer to v, useful for optional *int template fields
 // where the zero value is a meaningful, non-omitted setting (e.g. vlan 0).
 func intPtr(v int) *int { return &v }
+
+// uint32Ptr returns a pointer to v, useful for optional *uint32 template
+// fields where the zero value is a meaningful, non-omitted setting (e.g.
+// max_rate 0, meaning unlimited).
+func uint32Ptr(v uint32) *uint32 { return &v }
 
 // --- kubectl manifest apply/delete ---
 //
@@ -342,6 +408,16 @@ func socketDirPath(podUID, claimName, requestName string) string {
 	return filepath.Join(hostSocketRoot, podUID+"_"+claimName+"_"+requestName)
 }
 
+// waitForOvsPortsGone polls until no OVS port remains for claimUID.
+func waitForOvsPortsGone(ctx context.Context, nodeName, claimUID string) {
+	GinkgoHelper()
+	EventuallyWithOffset(1, func(g Gomega) {
+		p, err := ovsPortsForClaim(ctx, nodeName, claimUID)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(p).To(BeEmpty(), "OVS ports still present for claim %s: %v", claimUID, p)
+	}).WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+}
+
 func addBridgeToOVS(ctx context.Context, nodeName, bridgeName string) {
 	GinkgoHelper()
 	_, err := ovsExec(ctx, nodeName,
@@ -372,7 +448,7 @@ func statOwnership(ctx context.Context, nodeName, path string) (uid, gid string)
 }
 
 func hasACLEntry(ctx context.Context, nodeName, path, entry string) bool {
-	out, err := driverPodExec(ctx, nodeName, "getfacl", "-n", path)
+	out, err := driverPodExec(ctx, nodeName, "getfacl", path)
 	if err != nil {
 		return false
 	}
@@ -433,6 +509,69 @@ func deletePodAndWait(ctx context.Context, namespace, name string) {
 	}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
 }
 
+// --- High-level spec setup helpers ---
+//
+// These fold the setup sequence shared by most specs (apply a policy and wait
+// for its bridge to be advertised; apply a claim+pod and wait for Running) into
+// a few named steps, so a spec reads as what it tests rather than the
+// scaffolding around it. Object names derive from a single base:
+// "<base>-policy", "<base>-claim", "<base>-pod".
+
+// applyPolicy renders and applies an OvsDpdkResourcePolicy ("<base>-policy")
+// advertising bridges on node, then blocks until each bridge appears in that
+// node's ResourceSlices. The policy is removed via DeferCleanup on scope exit.
+func applyPolicy(ctx context.Context, base, node string, bridges ...string) {
+	GinkgoHelper()
+	applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+		policyData{Name: base + "-policy", NodeNames: []string{node}, Bridges: bridges}))
+	for _, b := range bridges {
+		waitForDeviceInSlice(ctx, node, b)
+	}
+}
+
+// applyClaimAndPod renders and applies a claim ("<base>-claim") and a pod
+// ("<base>-pod") bound to it, without waiting — for negative-path specs that
+// assert the pod never becomes Running (see consistentlyNotRunning). The caller
+// fills only the claim's distinguishing fields; Name/Namespace come from base.
+// Both objects are removed via DeferCleanup on scope exit.
+func applyClaimAndPod(base string, c claimData) {
+	GinkgoHelper()
+	c.Name = base + "-claim"
+	c.Namespace = testNamespace
+	applyAndCleanup(mustRenderManifest("claim.yaml.tmpl", c))
+	applyAndCleanup(mustRenderManifest("pod.yaml.tmpl",
+		podData{Name: base + "-pod", Namespace: testNamespace, ClaimName: c.Name}))
+}
+
+// applyClaimPod is applyClaimAndPod plus a wait for the pod to reach Running.
+// It returns the running pod and the generated claim's UID — the two values a
+// happy-path spec almost always needs next (e.g. to locate the OVS port).
+func applyClaimPod(ctx context.Context, base string, c claimData) (*corev1.Pod, string) {
+	GinkgoHelper()
+	applyClaimAndPod(base, c)
+	pod := waitForPodRunning(ctx, testNamespace, base+"-pod")
+	return pod, claimUIDByName(ctx, base+"-claim")
+}
+
+// claimUIDByName returns the UID of the named ResourceClaim.
+func claimUIDByName(ctx context.Context, name string) string {
+	GinkgoHelper()
+	c, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, name, metav1.GetOptions{})
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "get claim %s", name)
+	return string(c.UID)
+}
+
+// consistentlyNotRunning asserts the named pod does not reach Running within a
+// short window — the standard check for a claim/config the driver should reject.
+func consistentlyNotRunning(ctx context.Context, name string) {
+	GinkgoHelper()
+	ConsistentlyWithOffset(1, func(g Gomega) {
+		p, err := cs.CoreV1().Pods(testNamespace).Get(ctx, name, metav1.GetOptions{})
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(p.Status.Phase).NotTo(Equal(corev1.PodRunning))
+	}).WithTimeout(20 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+}
+
 // --- Topology / Device Plugin helpers ---
 
 func addDPDKPort(ctx context.Context, nodeName, bridge, portName, pciAddr string) {
@@ -472,14 +611,24 @@ func waitForNodeResource(ctx context.Context, nodeName, resourceName string) {
 	}).WithTimeout(90 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
 }
 
+// waitForNodeResourceGone waits until the resource is no longer usable on the
+// node. The kubelet device manager does not remove an extended resource key
+// from Allocatable once it has been advertised — it only zeroes its quantity
+// when the device plugin unregisters. The key itself sticks around until the
+// kubelet is restarted (and even then may be restored from its on-disk
+// checkpoint). So "gone" here means "allocatable quantity is zero", not
+// "key absent".
 func waitForNodeResourceGone(ctx context.Context, nodeName, resourceName string) {
 	GinkgoHelper()
 	resName := corev1.ResourceName(resourceName)
 	EventuallyWithOffset(1, func(g Gomega) {
 		node, err := cs.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
-		_, ok := node.Status.Allocatable[resName]
-		g.Expect(ok).To(BeFalse(), "resource %s still in allocatable", resourceName)
+		qty, ok := node.Status.Allocatable[resName]
+		if !ok {
+			return
+		}
+		g.Expect(qty.Cmp(resource.MustParse("0"))).To(BeNumerically("<=", 0), "resource %s still allocatable", resourceName)
 	}).WithTimeout(90 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
 }
 
@@ -519,6 +668,326 @@ func waitForDeviceInSlice(ctx context.Context, nodeName, deviceName string) {
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(deviceNamesFromSlices(nodeSlices)).To(ContainElement(deviceName))
 	}).WithTimeout(60 * time.Second).WithPolling(5 * time.Second).Should(Succeed())
+}
+
+// --- KubeVirt / VirtualMachine helpers (OpenShift Virtualization) ---
+//
+// VMs are driven over "virtctl ssh", which tunnels through the API server
+// the same way "kubectl exec" does — no direct route to the pod network is
+// required, keeping these helpers consistent with the exec-based style used
+// for pods and nodes above.
+
+// kubectlOutput runs kubectl and returns stdout without failing the test on
+// error. Use in polling loops where the target resource may not exist yet.
+func kubectlOutput(args ...string) (string, error) {
+	allArgs := append([]string{"--kubeconfig", kubeconfig}, args...)
+	out, err := exec.Command("kubectl", allArgs...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("kubectl %v: %w: %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// vmSSHKeyEnvVar names the environment variable holding the path to the
+// private key used to authenticate to test VMs over virtctl ssh. Its public
+// half is baked into the test VM image's authorized_keys ahead of time (see
+// vm-dra.yaml.tmpl) — there's no cloud-init to inject it at boot, so the
+// same pre-provisioned key is reused across every run. VM tests fail
+// outright if it isn't set or the file doesn't exist, rather than
+// generating one.
+const vmSSHKeyEnvVar = "E2E_VM_SSH_KEY"
+
+// loadSSHKeyPair returns the private key path from vmSSHKeyEnvVar.
+func loadSSHKeyPair() (privateKeyPath string) {
+	GinkgoHelper()
+	privateKeyPath = os.Getenv(vmSSHKeyEnvVar)
+	ExpectWithOffset(1, privateKeyPath).NotTo(BeEmpty(), "%s must be set to the path of an SSH private key", vmSSHKeyEnvVar)
+
+	_, err := os.Stat(privateKeyPath)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "%s=%s", vmSSHKeyEnvVar, privateKeyPath)
+	return privateKeyPath
+}
+
+// restartVMI deletes the VirtualMachineInstance so the VM controller (via
+// runStrategy: Always) recreates it from the VM's current spec. This applies
+// interface changes without deleting/recreating the VM object itself — the
+// VM's containerDisk image already has everything it needs (SSH key,
+// iperf3, ethtool) baked in, so a restart is just a fast reboot, not a
+// re-provisioning step.
+func restartVMI(namespace, name string) {
+	GinkgoHelper()
+	runKubectl("delete", "vmi", name, "-n", namespace, "--ignore-not-found", "--wait=true", "--timeout=60s")
+}
+
+// deleteVMAndWait deletes the named VirtualMachine and blocks until kubectl
+// confirms it (and its VMI/virt-launcher pod) are fully gone. runKubectl
+// already fails the test if the delete itself errors or times out, so a
+// successful return means the deletion was clean.
+func deleteVMAndWait(namespace, name string) {
+	GinkgoHelper()
+	runKubectl("delete", "vm", name, "-n", namespace, "--wait=true", "--timeout=120s")
+}
+
+// waitForVMIRunning polls until the named VirtualMachineInstance reaches the
+// Running phase.
+func waitForVMIRunning(namespace, name string) {
+	GinkgoHelper()
+	EventuallyWithOffset(1, func(g Gomega) {
+		phase, err := kubectlOutput("get", "vmi", name, "-n", namespace, "-o", "jsonpath={.status.phase}")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(phase).To(Equal("Running"))
+	}).WithTimeout(3 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
+}
+
+// virtctlSSH runs command inside vmName over SSH via virtctl.
+func virtctlSSH(ctx context.Context, namespace, vmName, identityFile, command string) (string, error) {
+	args := []string{
+		"--kubeconfig", kubeconfig,
+		"ssh",
+		"--identity-file=" + identityFile,
+		"--local-ssh-opts", "-o StrictHostKeyChecking=no",
+		"--local-ssh-opts", "-o UserKnownHostsFile=/dev/null",
+		"--username=root",
+		"-c", command,
+		fmt.Sprintf("vm/%s/%s", vmName, namespace),
+	}
+	var out, errOut bytes.Buffer
+	cmd := exec.CommandContext(ctx, "virtctl", args...)
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("virtctl ssh %s %q: %w\n%s%s", vmName, command, err, out.String(), errOut.String())
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
+// waitForSSHReady polls until vmName accepts SSH connections.
+func waitForSSHReady(ctx context.Context, namespace, vmName, identityFile string) {
+	GinkgoHelper()
+	EventuallyWithOffset(1, func(g Gomega) {
+		_, err := virtctlSSH(ctx, namespace, vmName, identityFile, "true")
+		g.Expect(err).NotTo(HaveOccurred())
+	}).WithTimeout(3 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
+}
+
+// waitForVMsReady waits, in parallel, for vm1 and vm2 to reach Running and
+// accept SSH connections. iperf3 and ethtool ship pre-installed in the VM's
+// containerDisk image, so there's no package-install step to additionally
+// wait for. Callers can rely on both VMs being fully usable once this
+// returns — in particular, safe to reconfigure interface IPs on.
+func waitForVMsReady(ctx context.Context, vm1, vm2 vmData, identityFile string) {
+	GinkgoHelper()
+	var wg sync.WaitGroup
+	for _, vm := range []vmData{vm1, vm2} {
+		wg.Add(1)
+		go func(vm vmData) {
+			defer wg.Done()
+			defer GinkgoRecover()
+			waitForVMIRunning(vm.Namespace, vm.Name)
+			waitForSSHReady(ctx, vm.Namespace, vm.Name, identityFile)
+		}(vm)
+	}
+	wg.Wait()
+}
+
+// createVMs applies the VM manifests for vm1/vm2 with their interfaces
+// already in place and waits for both to boot and become reachable over
+// SSH. Use this once, for the initial creation — the VMs are born with the
+// right interface topology, no restart involved. Use updateVMInterfaces to
+// change a running VM's interface topology afterwards.
+func createVMs(ctx context.Context, vm1, vm2 vmData, identityFile string) {
+	GinkgoHelper()
+	applyYAML(mustRenderManifest("vm-dra.yaml.tmpl", vm1))
+	applyYAML(mustRenderManifest("vm-dra.yaml.tmpl", vm2))
+	waitForVMsReady(ctx, vm1, vm2, identityFile)
+}
+
+// updateVMInterfaces re-applies the VM manifests for vm1/vm2 and restarts
+// their VMIs so the new interface topology takes effect, returning once
+// both VMs are Running and reachable over SSH again.
+func updateVMInterfaces(ctx context.Context, vm1, vm2 vmData, identityFile string) {
+	GinkgoHelper()
+	applyYAML(mustRenderManifest("vm-dra.yaml.tmpl", vm1))
+	applyYAML(mustRenderManifest("vm-dra.yaml.tmpl", vm2))
+	restartVMI(vm1.Namespace, vm1.Name)
+	restartVMI(vm2.Namespace, vm2.Name)
+	waitForVMsReady(ctx, vm1, vm2, identityFile)
+}
+
+// waitForGuestInterface polls until iface is visible inside vmName. The
+// vhost-user interface is attached by the DRA binding plugin, so it can show
+// up in the guest slightly after the VM itself is Running and reachable over
+// the (unrelated) default SSH interface — configuring an IP too early fails
+// with "Cannot find device".
+func waitForGuestInterface(ctx context.Context, namespace, vmName, identityFile, iface string) {
+	GinkgoHelper()
+	EventuallyWithOffset(1, func(g Gomega) {
+		out, err := virtctlSSH(ctx, namespace, vmName, identityFile, "ip link show "+iface)
+		g.Expect(err).NotTo(HaveOccurred(), "%s not yet present on %s:\n%s", iface, vmName, out)
+	}).WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+}
+
+// minGuestMTU and maxGuestMTU bound the values configureInterfaceIP will
+// actually apply — an mtu outside this range is left unconfigured (falling
+// back to the interface's default MTU) rather than being applied as-is.
+const (
+	minGuestMTU = 1500
+	maxGuestMTU = 9000
+)
+
+// configureInterfaceIP sets a static IP on iface inside vmName via
+// NetworkManager, waiting for the interface to exist first. Any NetworkManager
+// connection profile already bound to iface (e.g. a stale DHCP profile
+// NetworkManager auto-created on a previous boot, or the profile from a
+// previous test) is deleted first, so the new config is the only one left
+// governing that device.
+//
+// mtu is optional — pass a value to also set an explicit MTU on the
+// connection (a jumbo MTU on the OVS bridge doesn't by itself raise the
+// guest's virtio-net interface MTU); omit it to leave the MTU untouched. A
+// value outside [minGuestMTU, maxGuestMTU] is ignored rather than applied.
+// Only the first value passed is used.
+//
+// Returns any error instead of failing the test itself — callers must gate
+// dependent steps (e.g. pingFromVM) on the returned error, see
+// mustConfigureInterfaceIP. The containerDisk is ephemeral, so this
+// configuration doesn't survive a reboot — it must be re-run after every
+// restartVMI.
+func configureInterfaceIP(ctx context.Context, namespace, vmName, identityFile, iface, cidr string, mtu ...int) error {
+	GinkgoHelper()
+	waitForGuestInterface(ctx, namespace, vmName, identityFile, iface)
+
+	setMTU := ""
+	if len(mtu) > 0 && mtu[0] >= minGuestMTU && mtu[0] <= maxGuestMTU {
+		setMTU = fmt.Sprintf("sudo nmcli connection modify %s ethernet.mtu %d && ", iface, mtu[0])
+	}
+
+	cmd := fmt.Sprintf(
+		`sudo nmcli device set %s managed yes; `+
+			`sudo sh -c 'nmcli -t -f NAME,DEVICE connection show | grep ":%s$" | cut -d: -f1 | xargs -r -I{} nmcli connection delete {}'; `+
+			`sudo nmcli connection add type ethernet ifname %s con-name %s ip4 %s && `+setMTU+`sudo nmcli connection up %s`,
+		iface, iface, iface, iface, cidr, iface)
+	_, err := virtctlSSH(ctx, namespace, vmName, identityFile, cmd)
+	if err != nil {
+		return fmt.Errorf("configure %s on %s: %w", iface, vmName, err)
+	}
+	return nil
+}
+
+// mustConfigureInterfaceIP calls configureInterfaceIP and fails the test
+// immediately if it errors, so that whatever runs after it (e.g.
+// pingFromVM) only ever executes once configuration has actually succeeded.
+func mustConfigureInterfaceIP(ctx context.Context, namespace, vmName, identityFile, iface, cidr string, mtu ...int) {
+	GinkgoHelper()
+	ExpectWithOffset(1, configureInterfaceIP(ctx, namespace, vmName, identityFile, iface, cidr, mtu...)).To(Succeed())
+}
+
+// --- DPDK-in-guest helpers (testpmd over vfio-pci) ---
+//
+// There's no stable, documented KubeVirt field for exposing a virtual IOMMU
+// to a virtio-net/vhost-user interface, so these use the standard vfio
+// no-IOMMU mode instead — the common, documented path for running DPDK
+// against paravirtual (virtio) NICs that have no real IOMMU backing them.
+
+// guestInterfacePCIAddress returns the PCI bus address (e.g. "0000:02:00.0")
+// of iface, read while it's still bound to its kernel driver. Call this
+// before bindInterfaceToVFIO detaches the device from the kernel.
+func guestInterfacePCIAddress(ctx context.Context, namespace, vmName, identityFile, iface string) string {
+	GinkgoHelper()
+	out, err := virtctlSSH(ctx, namespace, vmName, identityFile, "ethtool -i "+iface+" | awk '/bus-info/{print $2}'")
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "ethtool -i %s on %s:\n%s", iface, vmName, out)
+	ExpectWithOffset(1, out).NotTo(BeEmpty(), "no bus-info reported for %s on %s", iface, vmName)
+	return out
+}
+
+// bindInterfaceToVFIO detaches iface from its kernel driver and binds it to
+// vfio-pci (in no-IOMMU mode), returning its PCI address for use with
+// startTestpmd. dpdk-devbind.py must already be installed in the VM image.
+func bindInterfaceToVFIO(ctx context.Context, namespace, vmName, identityFile, iface string) (pciAddr string) {
+	GinkgoHelper()
+	waitForGuestInterface(ctx, namespace, vmName, identityFile, iface)
+	pciAddr = guestInterfacePCIAddress(ctx, namespace, vmName, identityFile, iface)
+
+	cmd := fmt.Sprintf(
+		"sudo modprobe vfio enable_unsafe_noiommu_mode=1 2>/dev/null; "+
+			"sudo sh -c 'echo Y > /sys/module/vfio/parameters/enable_unsafe_noiommu_mode' 2>/dev/null; "+
+			"sudo modprobe vfio-pci && sudo dpdk-devbind.py --bind=vfio-pci %s", pciAddr)
+	_, err := virtctlSSH(ctx, namespace, vmName, identityFile, cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "bind %s (%s) to vfio-pci on %s", iface, pciAddr, vmName)
+	return pciAddr
+}
+
+// startTestpmd launches a backgrounded testpmd instance on vmName over the
+// given (already vfio-pci bound, see bindInterfaceToVFIO) PCI devices,
+// running in forwardMode, logging its periodic (1s) statistics to logPath.
+// filePrefix and cores must be unique per concurrently-running instance on
+// the same VM so EAL instances don't collide.
+func startTestpmd(ctx context.Context, namespace, vmName, identityFile, filePrefix, cores, forwardMode string, pciAddrs []string, logPath string) {
+	GinkgoHelper()
+	var allowlist strings.Builder
+	for _, pci := range pciAddrs {
+		fmt.Fprintf(&allowlist, " -a %s", pci)
+	}
+	cmd := fmt.Sprintf(
+		"setsid nohup testpmd -l %s --file-prefix=%s -m 256%s -- --forward-mode=%s --stats-period=1 "+
+			">%s 2>&1 < /dev/null & sleep 1",
+		cores, filePrefix, allowlist.String(), forwardMode, logPath)
+	_, err := virtctlSSH(ctx, namespace, vmName, identityFile, cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "start testpmd (%s, %s) on %s", filePrefix, forwardMode, vmName)
+}
+
+// waitForTestpmdCounter polls logPath (a testpmd --stats-period=1 log) until
+// the named NIC statistics counter (e.g. "TX-packets", "RX-packets") last
+// reported a non-zero value, proving packets are actually flowing through
+// that testpmd instance.
+func waitForTestpmdCounter(ctx context.Context, namespace, vmName, identityFile, logPath, counter string) {
+	GinkgoHelper()
+	cmd := fmt.Sprintf("grep -o '%s: [0-9]*' %s 2>/dev/null | tail -1 | awk '{print $2}'", counter, logPath)
+	EventuallyWithOffset(1, func(g Gomega) {
+		out, err := virtctlSSH(ctx, namespace, vmName, identityFile, cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(out).NotTo(BeEmpty(), "%s not yet reported in %s on %s", counter, logPath, vmName)
+		n, convErr := strconv.Atoi(out)
+		g.Expect(convErr).NotTo(HaveOccurred(), "unexpected %s value %q in %s", counter, out, logPath)
+		g.Expect(n).To(BeNumerically(">", 0), "%s is still 0 in %s on %s", counter, logPath, vmName)
+	}).WithTimeout(60 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+}
+
+// pingFromVM pings targetIP from inside vmName, retrying briefly while the
+// peer interface/ARP entry settles. Extra ping flags (e.g. "-M", "do", "-s",
+// "8972" for a DF jumbo-frame ping) can be passed via extraArgs.
+func pingFromVM(ctx context.Context, namespace, vmName, identityFile, targetIP string, extraArgs ...string) {
+	GinkgoHelper()
+	args := append([]string{"ping", "-c", "3", "-W", "2"}, extraArgs...)
+	args = append(args, targetIP)
+	EventuallyWithOffset(1, func(g Gomega) {
+		out, err := virtctlSSH(ctx, namespace, vmName, identityFile, strings.Join(args, " "))
+		g.Expect(err).NotTo(HaveOccurred(), "ping from %s to %s:\n%s", vmName, targetIP, out)
+	}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+}
+
+// iperf3Between starts a one-shot iperf3 server on serverVM and runs an
+// iperf3 client from clientVM against serverIP, returning the achieved
+// throughput in bits per second (parsed from the client's JSON summary) so
+// callers can assert on it — e.g. to confirm ingress policing caps it.
+func iperf3Between(ctx context.Context, namespace, serverVM, clientVM, identityFile, serverIP string) float64 {
+	GinkgoHelper()
+	_, err := virtctlSSH(ctx, namespace, serverVM, identityFile,
+		"pkill iperf3 2>/dev/null; setsid nohup iperf3 -s -1 >/tmp/iperf3-server.log 2>&1 < /dev/null & sleep 1")
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "start iperf3 server on %s", serverVM)
+
+	out, err := virtctlSSH(ctx, namespace, clientVM, identityFile, fmt.Sprintf("iperf3 -c %s -t 3 -J", serverIP))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "iperf3 client on %s:\n%s", clientVM, out)
+
+	var result struct {
+		End struct {
+			SumReceived struct {
+				BitsPerSecond float64 `json:"bits_per_second"`
+			} `json:"sum_received"`
+		} `json:"end"`
+	}
+	ExpectWithOffset(1, json.Unmarshal([]byte(out), &result)).To(Succeed(), "parse iperf3 JSON output:\n%s", out)
+	return result.End.SumReceived.BitsPerSecond
 }
 
 // restartDriverOnNode deletes the driver pod on the given node and waits for

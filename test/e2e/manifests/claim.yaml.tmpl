@@ -22,14 +22,16 @@ spec:
       - opaque:
           driver: ovsdpdk.k8snetworkplumbingwg.io
           parameters:
-            apiVersion: ovsdpdk.k8snetworkplumbingwg.io/v1alpha1
-            kind: OvsPortConfig
+            apiVersion: {{ if .ConfigAPIVersion }}{{ .ConfigAPIVersion }}{{ else }}ovsdpdk.k8snetworkplumbingwg.io/v1alpha1{{ end }}
+            kind: {{ if .ConfigKind }}{{ .ConfigKind }}{{ else }}OvsPortConfig{{ end }}
 {{- if .Vlan }}
             vlan: {{ .Vlan }}
 {{- end }}
-{{- if .MaxRate }}
+{{- if .HasPolicing }}
             policing:
+{{- if .MaxRate }}
               max_rate: {{ .MaxRate }}
+{{- end }}
 {{- if .Burst }}
               burst: {{ .Burst }}
 {{- end }}

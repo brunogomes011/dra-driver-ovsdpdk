@@ -1,0 +1,59 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace }}
+  labels:
+    kubevirt.io/vm: {{ .Name }}
+spec:
+  runStrategy: Always
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: {{ .Name }}
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: {{ .NodeName }}
+      domain:
+{{- if .HugepageSize }}
+        memory:
+          hugepages:
+            pageSize: {{ .HugepageSize }}
+{{- end }}
+        devices:
+          networkInterfaceMultiqueue: true
+          rng: {}
+          disks:
+            - disk:
+                bus: virtio
+              name: containerdisk
+          interfaces:
+            - name: default
+              masquerade: {}
+{{- range .Interfaces }}
+            - name: {{ .Name }}
+              binding:
+                name: vhostuser
+{{- end }}
+        resources:
+          requests:
+            memory: 2Gi
+            cpu: "{{ if .CPUCount }}{{ .CPUCount }}{{ else }}1{{ end }}"
+      networks:
+        - name: default
+          pod: {}
+{{- range .Interfaces }}
+        - name: {{ .Name }}
+          resourceClaim:
+            claimName: {{ .ClaimRefName }}
+            requestName: vhost-port
+{{- end }}
+      resourceClaims:
+{{- range .Interfaces }}
+        - name: {{ .ClaimRefName }}
+          resourceClaimTemplateName: {{ .TemplateName }}
+{{- end }}
+      volumes:
+        - name: containerdisk
+          containerDisk:
+            image: {{ .Image }}

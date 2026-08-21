@@ -17,9 +17,9 @@
 package e2e_test
 
 import (
-	"time"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -29,9 +29,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-//Claim Lifecycle
 
-var _ = Describe("Claim lifecycle on worker1", Label("tier1"), func() {
+
+var _ = Describe("Claim lifecycle on worker1", Label(tier1), func() {
 	const (
 		claimName = "e2e-claim-lifecycle"
 		podName   = "e2e-pod-lifecycle"
@@ -74,7 +74,7 @@ var _ = Describe("Claim lifecycle on worker1", Label("tier1"), func() {
 	})
 })
 
-var _ = Describe("Socket created using pod-claim-name annotation name", Label("tier2"), func() {
+var _ = Describe("Socket created using pod-claim-name annotation name", Label(tier2), func() {
 	const (
 		templateName = "e2e-claim-tmpl"
 		podClaimName = "vhost-test-name"
@@ -117,7 +117,7 @@ var _ = Describe("Socket created using pod-claim-name annotation name", Label("t
 	})
 })
 
-var _ = Describe("Claim targeting non-existent bridge", Label("tier2"), func() {
+var _ = Describe("Claim targeting non-existent bridge", Label(tier2), func() {
 	const (
 		claimName = "e2e-nomatch-claim"
 		podName   = "e2e-pod-nomatch"
@@ -149,7 +149,7 @@ var _ = Describe("Claim targeting non-existent bridge", Label("tier2"), func() {
 	})
 })
 
-var _ = Describe("Early pod deletion cleanup", Label("tier1"), func() {
+var _ = Describe("Pod deleted while still preparing", Label(tier2), func() {
 	const (
 		claimName = "e2e-early-del-claim"
 		podName   = "e2e-pod-early-del"
@@ -186,7 +186,7 @@ var _ = Describe("Early pod deletion cleanup", Label("tier1"), func() {
 	})
 })
 
-var _ = Describe("Claim with unknown device class name", Label("tier2"), func() {
+var _ = Describe("Claim with unknown device class name", Label(tier2), func() {
 	const (
 		claimName = "e2e-unknown-class-claim"
 		podName   = "e2e-pod-unknown-class"
@@ -218,9 +218,8 @@ var _ = Describe("Claim with unknown device class name", Label("tier2"), func() 
 	})
 })
 
-//Claim Status
 
-var _ = Describe("Claim status", Label("tier1"), func() {
+var _ = Describe("Claim status", Label(tier1), func() {
 	const (
 		claimName = "e2e-claim-status"
 		podName   = "e2e-pod-status"
@@ -251,7 +250,7 @@ var _ = Describe("Claim status", Label("tier1"), func() {
 	})
 })
 
-var _ = Describe("OvsPortConfig propagation to claim status", Label("tier1"), func() {
+var _ = Describe("OvsPortConfig propagation to claim status", Label(tier2), func() {
 	const (
 		claimName = "e2e-portconfig-claim"
 		podName   = "e2e-pod-portconfig"
@@ -267,8 +266,8 @@ var _ = Describe("OvsPortConfig propagation to claim status", Label("tier1"), fu
 				Namespace:  testNamespace,
 				BridgeName: plat.bridge0,
 				Vlan:       intPtr(42),
-				MaxRate:    50000, // 50 Mbps in kbps
-				Burst:      5000,  // 5 Mb in kb
+				MaxRate:    uint32Ptr(50000), // 50 Mbps in kbps
+				Burst:      5000,             // 5 Mb in kb
 			}))
 		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{Name: podName, Namespace: testNamespace, ClaimName: claimName}))
 		waitForPodRunning(ctx, testNamespace, podName)
@@ -288,7 +287,6 @@ var _ = Describe("OvsPortConfig propagation to claim status", Label("tier1"), fu
 	})
 })
 
-// todo: Review this test
 var _ = Describe("Claim status timing", Label("troubleshoot"), func() {
 	const (
 		claimName = "e2e-status-timing-claim"
@@ -335,9 +333,8 @@ var _ = Describe("Claim status timing", Label("troubleshoot"), func() {
 	})
 })
 
-//Multi claims on same bridge
 
-var _ = Describe("Multiple ports from same bridge in one pod", Label("tier1"), func() {
+var _ = Describe("Multiple ports from same bridge in one pod", Label(tier2), func() {
 	const podName = "e2e-pod-multi-port"
 	claimNames := []string{"e2e-multi-port-0", "e2e-multi-port-1"}
 
@@ -398,7 +395,7 @@ var _ = Describe("Multiple ports from same bridge in one pod", Label("tier1"), f
 	})
 })
 
-var _ = Describe("Two claims, two Pods", Label("tier1"), func() {
+var _ = Describe("Two claims, two Pods", Label(tier2), func() {
 	const (
 		claim0 = "e2e-two-claim-0"
 		claim1 = "e2e-two-claim-1"
@@ -434,7 +431,7 @@ var _ = Describe("Two claims, two Pods", Label("tier1"), func() {
 	})
 })
 
-var _ = Describe("Same claim referenced by two Pods", Label("tier2"), func() {
+var _ = Describe("Same claim referenced by two Pods", Label("troubleshoot"), func() {
 	const (
 		claimName = "e2e-shared-claim"
 		pod0      = "e2e-shared-pod-0"
@@ -463,9 +460,8 @@ var _ = Describe("Same claim referenced by two Pods", Label("tier2"), func() {
 	})
 })
 
-//Single claim with multiple requests
 
-var _ = Describe("Single claim with multiple requests", Label("tier1"), func() {
+var _ = Describe("Single claim with multiple requests", Label(tier1), func() {
 	const (
 		claimName = "e2e-multi-request"
 		podName   = "e2e-pod-multi-request"
@@ -544,7 +540,7 @@ var _ = Describe("Single claim with multiple requests", Label("tier1"), func() {
 	})
 })
 
-var _ = Describe("Partial failure rollback", Label("tier2"), func() {
+var _ = Describe("Partial failure rollback", Label(tier2), func() {
 	const (
 		claimName = "e2e-rollback-claim"
 		podName   = "e2e-pod-rollback"
@@ -581,7 +577,7 @@ var _ = Describe("Partial failure rollback", Label("tier2"), func() {
 	})
 })
 
-var _ = Describe("Requests on different bridges", Label("tier2"), func() {
+var _ = Describe("Requests on different bridges", Label(tier2), func() {
 	const (
 		claimName = "e2e-diff-bridge-claim"
 		podName   = "e2e-pod-diff-bridge"
@@ -641,7 +637,7 @@ var _ = Describe("Requests on different bridges", Label("tier2"), func() {
 	})
 })
 
-var _ = Describe("Cannot request 2 ports on the same request", Label("troubleshoot"), func() {
+var _ = Describe("Cannot request 2 ports on the same request", Label(tier2), func() {
 	const (
 		claimName = "e2e-count-claim"
 		podName   = "e2e-pod-count"

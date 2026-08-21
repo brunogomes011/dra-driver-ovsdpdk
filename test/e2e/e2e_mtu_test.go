@@ -28,7 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-var _ = Describe("MTU", Ordered, func() {
+var _ = Describe("MTU", Ordered, Label(tier1), func() {
 	const (
 		claimName = "e2e-mtu-claim"
 		podName   = "e2e-mtu-pod"
@@ -57,7 +57,7 @@ var _ = Describe("MTU", Ordered, func() {
 		ports = waitForOvsPorts(ctx, pod.Spec.NodeName, claimUID)
 	})
 
-	It("mtu attribute is present in the ResourceSlice device", Label("tier1"), func(ctx SpecContext) {
+	It("mtu attribute is present in the ResourceSlice device", Label(tier1), func(ctx SpecContext) {
 		attrKey := resourceapi.QualifiedName(driverName + "/mtu")
 		nodeSlices, err := resourceSlicesForNode(ctx, workers[0])
 		Expect(err).NotTo(HaveOccurred())
@@ -76,13 +76,13 @@ var _ = Describe("MTU", Ordered, func() {
 		Expect(found).To(BeTrue(), "device %s not found in ResourceSlices", plat.bridge0)
 	})
 
-	It("mtu_request is set on the OVS interface", Label("tier1"), func(ctx SpecContext) {
+	It("mtu_request is set on the OVS interface", Label(tier1), func(ctx SpecContext) {
 		got, err := ovsInterfaceGet(ctx, pod.Spec.NodeName, ports[0], "mtu_request")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).To(Equal(fmt.Sprintf("%d", mtu)))
 	})
 
-	It("mtu is present in the in-container device metadata file", Label("tier1"), func(ctx SpecContext) {
+	It("mtu is present in the in-container device metadata file", Label(tier1), func(ctx SpecContext) {
 		Eventually(func(g Gomega) {
 			md, err := readDeviceMetadataFile(ctx, testNamespace, podName, "consumer",
 				claimName, "vhost-port")
@@ -98,7 +98,7 @@ var _ = Describe("MTU", Ordered, func() {
 	})
 })
 
-var _ = Describe("MTU absent", Label("tier1"), func() {
+var _ = Describe("MTU absent", Label(tier2), func() {
 	It("mtu_request is absent when no mtu is configured", func(ctx SpecContext) {
 		const (
 			plainClaimName = "e2e-mtu-absent-claim"

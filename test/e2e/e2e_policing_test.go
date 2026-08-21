@@ -26,36 +26,21 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-var _ = Describe("Ingress policing", Ordered, Label("tier1"), func() {
-	const (
-		claimName = "e2e-policing"
-		podName   = "e2e-pod-policing"
-	)
+var _ = Describe("Ingress policing", Ordered, Label(tier2), func() {
+	const base = "e2e-policing"
 
 	var pod *corev1.Pod
 	var ports []string
-	var claimUID string
 
 	BeforeAll(func(ctx SpecContext) {
-		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{Name: "e2e-policing-policy", NodeNames: []string{workers[0]}, Bridges: []string{plat.bridge0}}))
-		waitForDeviceInSlice(ctx, workers[0], plat.bridge0)
-		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl",
-			claimData{
-				Name:       claimName,
-				Namespace:  testNamespace,
-				BridgeName: plat.bridge0,
-				MaxRate:    100000, // 100 Mbps in kbps
-				Burst:      10000,  // 10 Mb in kb
-			}))
-		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{Name: podName, Namespace: testNamespace, ClaimName: claimName}))
-		pod = waitForPodRunning(ctx, testNamespace, podName)
-
-		c, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, claimName, metav1.GetOptions{})
-		Expect(err).NotTo(HaveOccurred())
-		claimUID = string(c.UID)
-
-		ports = waitForOvsPorts(ctx, pod.Spec.NodeName, claimUID)
+		applyPolicy(ctx, base, workers[0], plat.bridge0)
+		var uid string
+		pod, uid = applyClaimPod(ctx, base, claimData{
+			BridgeName: plat.bridge0,
+			MaxRate:    uint32Ptr(100000), // 100 Mbps in kbps
+			Burst:      10000,             // 10 Mb in kb
+		})
+		ports = waitForOvsPorts(ctx, pod.Spec.NodeName, uid)
 	})
 
 	It("ingress_policing_rate is set on the OVS interface", func(ctx SpecContext) {
@@ -72,7 +57,7 @@ var _ = Describe("Ingress policing", Ordered, Label("tier1"), func() {
 
 	It("policing config is reflected in ResourceClaim status data", func(ctx SpecContext) {
 		Eventually(func(g Gomega) {
-			c, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, claimName, metav1.GetOptions{})
+			c, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, base+"-claim", metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(c.Status.Devices).NotTo(BeEmpty())
 			g.Expect(c.Status.Devices[0].Data).NotTo(BeNil())
@@ -84,27 +69,57 @@ var _ = Describe("Ingress policing", Ordered, Label("tier1"), func() {
 	})
 })
 
-var _ = Describe("Ingress policing absent", Label("tier2"), func() {
+var _ = Describe("Ingress policing absent", Label(tier2), func() {
+	const base = "e2e-policing-absent"
+
 	It("policing is absent from OVS interface when not configured", func(ctx SpecContext) {
-		const (
-			plainClaimName = "e2e-policing-absent"
-			plainPodName   = "e2e-pod-policing-absent"
-		)
-		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{Name: "e2e-policing-absent-policy", NodeNames: []string{workers[0]}, Bridges: []string{plat.bridge0}}))
-		waitForDeviceInSlice(ctx, workers[0], plat.bridge0)
-		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl",
-			claimData{Name: plainClaimName, Namespace: testNamespace, BridgeName: plat.bridge0}))
-		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl",
-			podData{Name: plainPodName, Namespace: testNamespace, ClaimName: plainClaimName}))
-		plainPod := waitForPodRunning(ctx, testNamespace, plainPodName)
+		applyPolicy(ctx, base, workers[0], plat.bridge0)
+		pod, uid := applyClaimPod(ctx, base, claimData{BridgeName: plat.bridge0})
+		ports := waitForOvsPorts(ctx, pod.Spec.NodeName, uid)
 
-		c, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, plainClaimName, metav1.GetOptions{})
+		got, err := ovsInterfaceGet(ctx, pod.Spec.NodeName, ports[0], "ingress_policing_rate")
 		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal("0"))
+	})
+})
 
-		plainPorts := waitForOvsPorts(ctx, plainPod.Spec.NodeName, string(c.UID))
+var _ = Describe("Ingress policing rate only", Label(tier2), func() {
+	const base = "e2e-policing-rate-only"
 
-		got, err := ovsInterfaceGet(ctx, plainPod.Spec.NodeName, plainPorts[0], "ingress_policing_rate")
+	It("burst is 0 on the OVS interface when max_rate is set without a burst", func(ctx SpecContext) {
+		applyPolicy(ctx, base, workers[0], plat.bridge0)
+		pod, uid := applyClaimPod(ctx, base, claimData{BridgeName: plat.bridge0, MaxRate: uint32Ptr(50000)})
+		ports := waitForOvsPorts(ctx, pod.Spec.NodeName, uid)
+
+		rate, err := ovsInterfaceGet(ctx, pod.Spec.NodeName, ports[0], "ingress_policing_rate")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rate).To(Equal("50000"))
+
+		burst, err := ovsInterfaceGet(ctx, pod.Spec.NodeName, ports[0], "ingress_policing_burst")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(burst).To(Equal("0"))
+	})
+})
+
+var _ = Describe("Ingress policing without max_rate rejected", Label(tier2), func() {
+	const base = "e2e-policing-no-rate"
+
+	It("pod does not reach Running when burst is set without max_rate", func(ctx SpecContext) {
+		applyPolicy(ctx, base, workers[0], plat.bridge0)
+		applyClaimAndPod(base, claimData{BridgeName: plat.bridge0, Burst: 1000})
+		consistentlyNotRunning(ctx, base+"-pod")
+	})
+})
+
+var _ = Describe("Ingress policing rate zero", Label(tier2), func() {
+	const base = "e2e-policing-rate-zero"
+
+	It("ingress_policing_rate is 0 (unlimited, no policing enforced) when max_rate is explicitly 0", func(ctx SpecContext) {
+		applyPolicy(ctx, base, workers[0], plat.bridge0)
+		pod, uid := applyClaimPod(ctx, base, claimData{BridgeName: plat.bridge0, MaxRate: uint32Ptr(0)})
+		ports := waitForOvsPorts(ctx, pod.Spec.NodeName, uid)
+
+		got, err := ovsInterfaceGet(ctx, pod.Spec.NodeName, ports[0], "ingress_policing_rate")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).To(Equal("0"))
 	})

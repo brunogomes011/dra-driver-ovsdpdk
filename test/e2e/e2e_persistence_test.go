@@ -22,10 +22,11 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-var _ = Describe("Checkpoint persistence across driver restart", Label("tier2"), func() {
+var _ = Describe("Checkpoint persistence across driver restart", Label(tier2), func() {
 	const (
 		claimName = "e2e-persist-claim"
 		podName   = "e2e-persist-pod"
@@ -66,5 +67,77 @@ var _ = Describe("Checkpoint persistence across driver restart", Label("tier2"),
 
 		Eventually(func() bool { return dirExists(ctx, nodeName, socketDir) }).
 			WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(BeFalse())
+	})
+})
+
+var _ = Describe("Driver restart persistence", Label(tier2), func() {
+	It("existing pods are unaffected by a driver restart", func(ctx SpecContext) {
+		const (
+			claimName = "e2e-persist-unaffected-claim"
+			podName   = "e2e-persist-unaffected-pod"
+		)
+		nodeName := workers[0]
+
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{Name: "e2e-persist-unaffected-policy", NodeNames: []string{nodeName}, Bridges: []string{plat.bridge0}}))
+		waitForDeviceInSlice(ctx, nodeName, plat.bridge0)
+		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl",
+			claimData{Name: claimName, Namespace: testNamespace, BridgeName: plat.bridge0}))
+		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl",
+			podData{Name: podName, Namespace: testNamespace, ClaimName: claimName}))
+		pod := waitForPodRunning(ctx, testNamespace, podName)
+
+		claim, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, claimName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		claimUID := string(claim.UID)
+
+		waitForOvsPorts(ctx, nodeName, claimUID)
+		socketDir := socketDirPath(string(pod.UID), claimName, "vhost-port")
+		Expect(dirExists(ctx, nodeName, socketDir)).To(BeTrue(), "socket dir should exist before restart")
+
+		By("Restarting the driver pod on " + nodeName)
+		restartDriverOnNode(ctx, nodeName)
+		waitForDeviceInSlice(ctx, nodeName, plat.bridge0)
+
+		By("Confirming the consumer pod was never disrupted")
+		p, err := cs.CoreV1().Pods(testNamespace).Get(ctx, podName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(p.Status.Phase).To(Equal(corev1.PodRunning), "consumer pod should remain Running across driver restart")
+
+		ports, err := ovsPortsForClaim(ctx, nodeName, claimUID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ports).NotTo(BeEmpty(), "OVS port should remain intact across driver restart")
+
+		Expect(dirExists(ctx, nodeName, socketDir)).To(BeTrue(), "socket dir should remain intact across driver restart")
+	})
+
+	It("new claims work after a driver restart", func(ctx SpecContext) {
+		const (
+			claimName = "e2e-persist-postrestart-claim"
+			podName   = "e2e-persist-postrestart-pod"
+		)
+		nodeName := workers[0]
+
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{Name: "e2e-persist-postrestart-policy", NodeNames: []string{nodeName}, Bridges: []string{plat.bridge0}}))
+		waitForDeviceInSlice(ctx, nodeName, plat.bridge0)
+
+		By("Restarting the driver pod on " + nodeName)
+		restartDriverOnNode(ctx, nodeName)
+		waitForDeviceInSlice(ctx, nodeName, plat.bridge0)
+
+		By("Creating a brand new claim after the restart")
+		applyAndCleanup(mustRenderManifest("claim.yaml.tmpl",
+			claimData{Name: claimName, Namespace: testNamespace, BridgeName: plat.bridge0}))
+		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl",
+			podData{Name: podName, Namespace: testNamespace, ClaimName: claimName}))
+		pod := waitForPodRunning(ctx, testNamespace, podName)
+
+		claim, err := cs.ResourceV1().ResourceClaims(testNamespace).Get(ctx, claimName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		waitForOvsPorts(ctx, nodeName, string(claim.UID))
+		socketDir := socketDirPath(string(pod.UID), claimName, "vhost-port")
+		Expect(dirExists(ctx, nodeName, socketDir)).To(BeTrue(), "socket dir should be created for a claim prepared after restart")
 	})
 })

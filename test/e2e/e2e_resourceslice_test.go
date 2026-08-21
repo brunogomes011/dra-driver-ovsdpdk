@@ -25,13 +25,15 @@ import (
 	resourceapi "k8s.io/api/resource/v1"
 )
 
-// ResourceSlice Advertisement and node selector
 
-var _ = Describe("ResourceSlice advertisement", Label("tier1"),func() {
+
+var _ = Describe("ResourceSlice advertisement", Label(tier1), func() {
 	BeforeEach(func(ctx SpecContext) {
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{Name: "e2e-rs-policy-worker0", NodeNames: []string{workers[0]}, Bridges: []string{plat.bridge0}}))
+			policyData{Name: "e2e-rs-policy-workers", NodeNames: []string{workers[0],workers[1]}, Bridges: []string{plat.bridge0}}))
 		waitForDeviceInSlice(ctx, workers[0], plat.bridge0)
+		waitForDeviceInSlice(ctx, workers[1], plat.bridge0)
+		
 	})
 
 	It("each worker has at least one ResourceSlice", func(ctx SpecContext) {
@@ -85,7 +87,7 @@ var _ = Describe("ResourceSlice advertisement", Label("tier1"),func() {
 	})
 })
 
-var _ = Describe("Node selector", Label("tier1"), func() {
+var _ = Describe("Node selector", Label(tier2), func() {
 	BeforeEach(func(ctx SpecContext) {
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
 			policyData{Name: "e2e-ns-policy-worker1", NodeNames: []string{workers[0]}, Bridges: []string{plat.bridge0, plat.bridge1}}))
@@ -117,7 +119,7 @@ var _ = Describe("Node selector", Label("tier1"), func() {
 	})
 })
 
-var _ = Describe("Policy overlap", Label("tier2"), func() {
+var _ = Describe("Policy overlap", Label(tier2), func() {
 	BeforeEach(func(ctx SpecContext) {
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
 			policyData{Name: "e2e-mp-policy-shared", NodeNames: []string{workers[0], workers[1]}, Bridges: []string{plat.bridge0}}))
@@ -148,7 +150,7 @@ var _ = Describe("Policy overlap", Label("tier2"), func() {
 	})
 })
 
-var _ = Describe("Policy update - Replace bridge", Label("tier1"), func() {
+var _ = Describe("Policy update - Replace bridge", Label(tier2), func() {
 	It("replacing a bridge in the policy updates ResourceSlices accordingly", func(ctx SpecContext) {
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
 			policyData{Name: "e2e-policy-replace", NodeNames: []string{workers[0], workers[1]}, Bridges: []string{plat.bridge0, plat.bridge1}}))
@@ -175,7 +177,7 @@ var _ = Describe("Policy update - Replace bridge", Label("tier1"), func() {
 	})
 })
 
-var _ = Describe("Duplicate detection", Label("tier2"), func() {
+var _ = Describe("Duplicate detection", Label(tier2), func() {
 	It("second policy with a duplicate bridge does not advertise any of its bridges", func(ctx SpecContext) {
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
 			policyData{Name: "e2e-dup-base", NodeNames: []string{workers[0], workers[1]}, Bridges: []string{plat.bridge0}}))
@@ -195,7 +197,7 @@ var _ = Describe("Duplicate detection", Label("tier2"), func() {
 	})
 })
 
-var _ = Describe("Policy update - Remove bridge", Label("tier2"), func() {
+var _ = Describe("Policy update - Remove bridge", Label(tier2), func() {
 	It("removing a bridge from the policy removes it from ResourceSlices", func(ctx SpecContext) {
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
 			policyData{Name: "e2e-policy-update", NodeNames: []string{workers[0], workers[1]}, Bridges: []string{plat.bridge0, plat.bridge1}}))
@@ -222,10 +224,16 @@ var _ = Describe("Policy update - Remove bridge", Label("tier2"), func() {
 	})
 })
 
-var _ = Describe("Policy API validation", Label("tier1"), func() {
+var _ = Describe("Policy API validation", Label(tier1), func() {
 	It("policy without bridges is rejected by the API server", func(_ SpecContext) {
 		manifest := mustRenderManifest("policy.yaml.tmpl",
 			policyData{Name: "e2e-policy-no-bridge", NodeNames: []string{workers[0]}, Bridges: []string{}})
+		Expect(tryApplyYAML(manifest)).To(HaveOccurred())
+	})
+
+	It("a bridge entry without a name is rejected by the API server", func(_ SpecContext) {
+		manifest := mustRenderManifest("policy.yaml.tmpl",
+			policyData{Name: "e2e-policy-bridge-no-name", NodeNames: []string{workers[0]}, Bridges: []string{""}})
 		Expect(tryApplyYAML(manifest)).To(HaveOccurred())
 	})
 })

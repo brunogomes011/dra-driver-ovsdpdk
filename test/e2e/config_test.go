@@ -31,12 +31,14 @@ type platformConfig struct {
 	aclEntry string
 
 	configUser    string
+	configGroup   string
 	configAclUser string
 
-	testCfgUser  string
-	testCfgGroup string
+	selinuxLabel string
 }
 
+// This variable is applied to determine if the test is done
+// toward an upstream platform or Openshift/Downstream
 var isOpenShift = os.Getenv("E2E_PLATFORM") == "openshift"
 
 var plat = newPlatform()
@@ -55,10 +57,9 @@ func newPlatform() platformConfig {
 			aclEntry: "user:800",
 
 			configUser:    "openvswitch",
+			configGroup: "107",
 			configAclUser: "openvswitch",
-
-			testCfgUser:  "openvswitch",
-			testCfgGroup: "107",
+			selinuxLabel: "system_u:object_r:container_file_t:s0",
 		}
 	}
 	return platformConfig{
@@ -71,10 +72,10 @@ func newPlatform() platformConfig {
 		aclEntry: "user:1001",
 
 		configUser:    "1001",
+		configGroup: "107",
 		configAclUser: "1001",
+		selinuxLabel: "system_u:object_r:container_file_t:s0",
 
-		testCfgUser:  "0",
-		testCfgGroup: "0",
 	}
 }
 

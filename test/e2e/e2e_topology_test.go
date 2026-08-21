@@ -24,26 +24,31 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("Topology Device Plugin", Label("tier2"), func() {
+var _ = Describe("Topology Device Plugin", Label(tier2), func() {
 	const (
 		dpdkPort   = "dpdk-topo0"
 		policyName = "e2e-topology-policy"
 	)
 
-	var bridge, topologyResource string
+	var bridge, topologyResource, topologyResourceConfig string
 
 	BeforeEach(func() {
 		bridge = plat.topoBridge
+		topologyResourceConfig = "topology-" + plat.topoBridge
 		topologyResource = driverName + "/topology-" + plat.topoBridge
-		if topologyPCI == "" {
+		if topologyPCI_1 == "" {
 			Skip("topology tests require TOPOLOGY_PCI env var")
 		}
+		if topologyPCI_2 == "" {
+			Skip("test requires TOPOLOGY_PCI_SECOND env var (PCI address on different NUMA node)")
+		}
+
 	})
 
 	It("no extended resource before DPDK interface exists", func(ctx SpecContext) {
 		nodeName := workers[0]
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{Name: policyName, NodeNames: []string{nodeName}, Bridges: []string{bridge}, TopologyResource: topologyResource}))
+			policyData{Name: policyName, NodeNames: []string{nodeName}, Bridges: []string{bridge}, TopologyResource: topologyResourceConfig}))
 
 		Consistently(func() int64 {
 			return nodeAllocatableQuantity(ctx, nodeName, topologyResource)
@@ -53,9 +58,9 @@ var _ = Describe("Topology Device Plugin", Label("tier2"), func() {
 	It("extended resource appears after adding DPDK interface", func(ctx SpecContext) {
 		nodeName := workers[0]
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{Name: policyName, NodeNames: []string{nodeName}, Bridges: []string{bridge}, TopologyResource: topologyResource}))
+			policyData{Name: policyName, NodeNames: []string{nodeName}, Bridges: []string{bridge}, TopologyResource: topologyResourceConfig}))
 
-		addDPDKPort(ctx, nodeName, bridge, dpdkPort, topologyPCI)
+		addDPDKPort(ctx, nodeName, bridge, dpdkPort, topologyPCI_1)
 		DeferCleanup(removeDPDKPort, context.Background(), nodeName, dpdkPort)
 
 		waitForNodeResource(ctx, nodeName, topologyResource)
@@ -66,9 +71,9 @@ var _ = Describe("Topology Device Plugin", Label("tier2"), func() {
 	It("extended resource disappears when DPDK interface is removed", func(ctx SpecContext) {
 		nodeName := workers[0]
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{Name: policyName, NodeNames: []string{nodeName}, Bridges: []string{bridge}, TopologyResource: topologyResource}))
+			policyData{Name: policyName, NodeNames: []string{nodeName}, Bridges: []string{bridge}, TopologyResource: topologyResourceConfig}))
 
-		addDPDKPort(ctx, nodeName, bridge, dpdkPort, topologyPCI)
+		addDPDKPort(ctx, nodeName, bridge, dpdkPort, topologyPCI_1)
 		waitForNodeResource(ctx, nodeName, topologyResource)
 
 		removeDPDKPort(ctx, nodeName, dpdkPort)
@@ -82,9 +87,9 @@ var _ = Describe("Topology Device Plugin", Label("tier2"), func() {
 		)
 		nodeName := workers[0]
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{Name: policyName, NodeNames: []string{nodeName}, Bridges: []string{bridge}, TopologyResource: topologyResource}))
+			policyData{Name: policyName, NodeNames: []string{nodeName}, Bridges: []string{bridge}, TopologyResource: topologyResourceConfig}))
 
-		addDPDKPort(ctx, nodeName, bridge, dpdkPort, topologyPCI)
+		addDPDKPort(ctx, nodeName, bridge, dpdkPort, topologyPCI_1)
 		DeferCleanup(removeDPDKPort, context.Background(), nodeName, dpdkPort)
 		waitForNodeResource(ctx, nodeName, topologyResource)
 
@@ -103,15 +108,15 @@ var _ = Describe("Topology Device Plugin", Label("tier2"), func() {
 		)
 		nodeName := workers[0]
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{Name: policyName, NodeNames: []string{nodeName}, Bridges: []string{bridge}, TopologyResource: topologyResource}))
+			policyData{Name: policyName, NodeNames: []string{nodeName}, Bridges: []string{bridge}, TopologyResource: topologyResourceConfig}))
 
-		addDPDKPort(ctx, nodeName, bridge, dpdkPort, topologyPCI)
+		addDPDKPort(ctx, nodeName, bridge, dpdkPort, topologyPCI_1)
 		waitForNodeResource(ctx, nodeName, topologyResource)
 
 		removeDPDKPort(ctx, nodeName, dpdkPort)
 		waitForNodeResourceGone(ctx, nodeName, topologyResource)
 
-		addDPDKPort(ctx, nodeName, bridge, dpdkPort, topologyPCI)
+		addDPDKPort(ctx, nodeName, bridge, dpdkPort, topologyPCI_1)
 		DeferCleanup(removeDPDKPort, context.Background(), nodeName, dpdkPort)
 		waitForNodeResource(ctx, nodeName, topologyResource)
 
@@ -121,5 +126,25 @@ var _ = Describe("Topology Device Plugin", Label("tier2"), func() {
 
 		pod := waitForPodRunning(ctx, testNamespace, podName)
 		Expect(pod.Spec.NodeName).To(Equal(nodeName))
+	})
+
+	It("multiple DPDK interfaces with different NUMAs — deviceplugin not started, driver logs error", func(ctx SpecContext) {
+		const (
+			dpdkPort1 = "dpdk-multi-numa-0"
+			dpdkPort2 = "dpdk-multi-numa-1"
+		)
+		nodeName := workers[0]
+
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{Name: "e2e-topo-multinuma-policy", NodeNames: []string{nodeName}, Bridges: []string{bridge}, TopologyResource: topologyResourceConfig}))
+
+		addDPDKPort(ctx, nodeName, bridge, dpdkPort1, topologyPCI_1)
+		waitForNodeResource(ctx, nodeName, topologyResource)
+
+		addDPDKPort(ctx, nodeName, bridge, dpdkPort2, topologyPCI_2)
+		DeferCleanup(removeDPDKPort, context.Background(), nodeName, dpdkPort1)
+		DeferCleanup(removeDPDKPort, context.Background(), nodeName, dpdkPort2)
+
+		waitForNodeResourceGone(ctx, nodeName, topologyResource)
 	})
 })

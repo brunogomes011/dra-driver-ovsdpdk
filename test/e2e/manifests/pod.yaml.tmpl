@@ -8,6 +8,11 @@ spec:
   terminationGracePeriodSeconds: 1
 {{- if .NodeName }}
   nodeName: {{ .NodeName }}
+{{- else if .NodeSelector }}
+  nodeSelector:
+    {{- range $key, $value := .NodeSelector }}
+    {{ $key }}: {{ $value }}
+    {{- end }}
 {{- end }}
   resourceClaims:
     - name: vhost
@@ -22,5 +27,9 @@ spec:
           - name: vhost
 {{- if .TopologyResource }}
         requests:
+          {{ .TopologyResource }}: "1"
+{{- end }}
+{{- if .TopologyResource }}
+        limits:
           {{ .TopologyResource }}: "1"
 {{- end }}

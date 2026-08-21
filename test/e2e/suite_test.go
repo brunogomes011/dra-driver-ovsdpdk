@@ -58,6 +58,41 @@ const (
 	hostSocketRoot  = "/var/run/ovsdpdk"
 )
 
+
+// The labels to run each type of test suite
+const (
+	tier1           = "tier1"
+	tier2           = "tier2"
+	tier2_openshift = "tier2_openshift"
+)
+
+// Well-known string literals repeated across the suite, centralised here so a
+// later pass can replace the scattered inline literals with these names. Not
+// yet wired into call sites — defined first for review of the names/values.
+const (
+	// consumerContainer is the workload container name in pod.yaml.tmpl.
+	consumerContainer = "consumer"
+	// defaultRequestName is the request name in claim.yaml.tmpl's single
+	// request; the per-request socket directory is named after it.
+	defaultRequestName = "vhost-port"
+	// qemuGID is the GID the vhost-user socket directory is group-owned by.
+	qemuGID = "107"
+
+	// podClaimNameAnnotation maps a generated ResourceClaim back to the
+	// pod-local claim name (spec.resourceClaims[].name) that produced it.
+	podClaimNameAnnotation = "resource.kubernetes.io/pod-claim-name"
+
+	// driverAppLabel / ovsAppLabel select the driver and OVS DaemonSet pods.
+	driverAppLabel = "app=dra-driver-ovsdpdk"
+	ovsAppLabel    = "app=ovs"
+
+	// Manifest template file names under manifests/.
+	policyTemplate = "policy.yaml.tmpl"
+	claimTemplate  = "claim.yaml.tmpl"
+	podTemplate    = "pod.yaml.tmpl"
+	configTemplate = "ovsdpdk-config.yaml.tmpl"
+)
+
 var (
 	// cs is the typed Kubernetes clientset, initialised in BeforeSuite.
 	cs kubernetes.Interface
@@ -68,9 +103,16 @@ var (
 	// workers holds the names of worker nodes, discovered in BeforeSuite.
 	workers []string
 
-	// topologyPCI is the PCI address of a virtio NIC on worker1 used for
-	// topology/Device Plugin tests.  When non-empty, topology tests run.
-	topologyPCI = os.Getenv("TOPOLOGY_PCI")
+	// topologyPCI_1 and topologyPCI_2 are the PCI address of a virtio NIC on workers used for
+	// topology/Device Plugin tests.  When non-empty, topology tests run, otherwise test skips
+	// It contains two variable to run test toward different numas
+	topologyPCI_1 = os.Getenv("TOPOLOGY_PCI_NUMA1")
+	topologyPCI_2 = os.Getenv("TOPOLOGY_PCI_NUMA2")
+
+	// vmImage is the containerDisk image for the KubeVirt VMs used by the
+	// downstream VM tests. It has no default: when empty, those tests are
+	// skipped (see the BeforeAll in e2e_downstream_test.go).
+	vmImage = os.Getenv("E2E_VM_IMAGE")
 )
 
 func TestE2E(t *testing.T) {
@@ -114,9 +156,7 @@ var _ = BeforeSuite(func() {
 	// Per-node policies are created by individual tests via applyAndCleanup.
 	applyManifest("deviceclass.yaml")
 	DeferCleanup(deleteManifest, "deviceclass.yaml")
-
-	cfgYAML := mustRenderManifest("ovsdpdk-config.yaml.tmpl",
-		globalConfigData{plat.configUser, plat.configAclUser})
+	cfgYAML := mustRenderManifest("ovsdpdk-config.yaml.tmpl", defaultOvsDpdkConfigData())
 	applyYAML(cfgYAML)
 	DeferCleanup(deleteYAML, cfgYAML)
 })

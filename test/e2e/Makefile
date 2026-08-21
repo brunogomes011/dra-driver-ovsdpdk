@@ -65,10 +65,11 @@ endef
   # Run e2e tests.  Expects the driver and OVS to be deployed and KUBECONFIG set.
   #
   # Optional env vars:
-  #   TOPOLOGY_PCI  — PCI address of a virtio NIC on worker1; enables topology tests.
+  #   TOPOLOGY_PCI_NUMA1 — PCI address of a virtio NIC on workers; enables topology tests with single NUMA
+  #   TOPOLOGY_PCI_NUMA2 — PCI address of a virtio NIC on workers; enables topology tests with double NUMAs 
   #   GINKGO_ARGS   — extra args passed to `go test`, e.g. a --ginkgo.label-filter.
 test:
-	go test -count=1 -v -timeout $(E2E_TIMEOUT) . $(GINKGO_ARGS)
+	go test -count=1 -v -timeout $(E2E_TIMEOUT) $(GINKGO_ARGS) . 
 
 test-openshift:
 	E2E_PLATFORM=openshift $(MAKE) test E2E_TIMEOUT=60m GINKGO_ARGS='$(GINKGO_ARGS)'
@@ -87,7 +88,7 @@ test-openshift-tier1:
 	$(MAKE) test-openshift GINKGO_ARGS='-args --ginkgo.label-filter="tier1"'
 
 test-openshift-tier2:
-	$(MAKE) test-openshift GINKGO_ARGS='-args --ginkgo.label-filter="tier2"'
+	$(MAKE) test-openshift GINKGO_ARGS='-args --ginkgo.label-filter="tier2 || tier2_openshift"'
 
 # --- OVS deployment ----------------------------------------------------------
 
