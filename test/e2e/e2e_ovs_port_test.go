@@ -29,7 +29,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-
 var _ = Describe("Vhost-user port lifecycle", Label(tier1), func() {
 	const base = "e2e-vhost"
 
@@ -107,7 +106,6 @@ var _ = Describe("Vhost-user port lifecycle", Label(tier1), func() {
 	})
 })
 
-
 var _ = Describe("Port on non-existent bridge (race)", Label(tier2), func() {
 	const (
 		bridge    = "br-race-create"
@@ -148,7 +146,6 @@ var _ = Describe("Port on non-existent bridge (race)", Label(tier2), func() {
 	})
 })
 
-
 var _ = Describe("Port already gone before deletion", Label(tier2), func() {
 	const (
 		claimName = "e2e-port-gone-claim"
@@ -179,7 +176,6 @@ var _ = Describe("Port already gone before deletion", Label(tier2), func() {
 			"socket dir must be removed even though the OVS port was already gone")
 	})
 })
-
 
 var _ = Describe("Two claims get distinct ports — different nodes", Label(tier2), func() {
 	const (
@@ -219,7 +215,6 @@ var _ = Describe("Two claims get distinct ports — different nodes", Label(tier
 		Expect(len(ports1)).To(Equal(1), "worker1 should have exactly one port")
 	})
 })
-
 
 var _ = Describe("Bridge hot-plug", Label(tier2), func() {
 	const (
@@ -352,5 +347,67 @@ var _ = Describe("Bridge hot-plug", Label(tier2), func() {
 		applyAndCleanup(mustRenderManifest("pod.yaml.tmpl", podData{Name: podName, Namespace: testNamespace, ClaimName: claimName}))
 		waitForPodRunning(ctx, testNamespace, podName)
 		deleteBridgeFromOVS(ctx, nodeName, bridge)
+	})
+})
+
+// This requires the env var OVS_IMAGE set for OVS daemonset image
+var _ = Describe("OVS lifecycle detection", Label(tier2), func() {
+	const policyName = "e2e-ovs-lifecycle-policy"
+
+	BeforeEach(func() {
+		if isOpenShift {
+			Skip("OVS daemonset lifecycle tests are not supported on OpenShift")
+		}
+		if ovsImage == "" {
+			Skip("OVS_IMAGE environment variable must be set to run OVS lifecycle tests")
+		}
+	})
+
+	It("DRA Driver does not publish any configured slice when OVS is stopped", func(ctx SpecContext) {
+		nodeName := workers[0]
+
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{Name: policyName, NodeNames: []string{nodeName}, Bridges: []string{plat.bridge0}}))
+		waitForDeviceInSlice(ctx, nodeName, plat.bridge0)
+
+		stopOVSDaemonSet(ctx)
+		DeferCleanup(startOVSDaemonSet, context.Background())
+
+		restartDriverDaemonSet(ctx)
+
+		waitForResourceSlicesEmpty(ctx, nodeName)
+
+		slices, err := resourceSlicesForNode(ctx, nodeName)
+		Expect(err).NotTo(HaveOccurred())
+
+		totalDevices := 0
+		for _, s := range slices {
+			totalDevices += len(s.Spec.Devices)
+		}
+		Expect(totalDevices).To(Equal(0), "DRA Driver should not publish devices when OVS is not running")
+	})
+
+	It("DRA Driver reconnects to OVS and re-publishes slices after OVS restart", func(ctx SpecContext) {
+		nodeName := workers[0]
+
+		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
+			policyData{Name: policyName + "-reconnect", NodeNames: []string{nodeName}, Bridges: []string{plat.bridge0}}))
+		waitForDeviceInSlice(ctx, nodeName, plat.bridge0)
+
+		stopOVSDaemonSet(ctx)
+		DeferCleanup(startOVSDaemonSet, context.Background())
+
+		restartDriverDaemonSet(ctx)
+
+		waitForResourceSlicesEmpty(ctx, nodeName)
+
+		startOVSDaemonSet(ctx)
+
+		Eventually(func(g Gomega) {
+			slices, err := resourceSlicesForNode(ctx, nodeName)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(deviceNamesFromSlices(slices)).To(ContainElement(plat.bridge0),
+				"DRA Driver should reconnect to OVS and re-publish the bridge")
+		}).WithTimeout(90 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
 	})
 })

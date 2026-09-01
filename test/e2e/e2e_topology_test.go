@@ -37,10 +37,10 @@ var _ = Describe("Topology Device Plugin", Label(tier2), func() {
 		topologyResourceConfig = "topology-" + plat.topoBridge
 		topologyResource = driverName + "/topology-" + plat.topoBridge
 		if topologyPCI_1 == "" {
-			Skip("topology tests require TOPOLOGY_PCI env var")
+			Skip("topology tests require TOPOLOGY_PCI_NUMA1 env var")
 		}
 		if topologyPCI_2 == "" {
-			Skip("test requires TOPOLOGY_PCI_SECOND env var (PCI address on different NUMA node)")
+			Skip("test requires TOPOLOGY_PCI_NUMA2 env var (PCI address on different NUMA node)")
 		}
 
 	})

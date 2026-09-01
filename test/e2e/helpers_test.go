@@ -198,7 +198,7 @@ type vmData struct {
 
 // guestInterfaceName returns the guest-visible interface name for the i-th
 // (0-indexed) entry in vmData.Interfaces.
-//todo: Identify the interface name correctly
+// todo: Identify the interface name correctly
 func guestInterfaceName(i int) string {
 	return fmt.Sprintf("enp%ds0", i+2)
 }
@@ -1014,5 +1014,102 @@ func restartDriverOnNode(ctx context.Context, nodeName string) {
 			}
 		}
 		g.Expect(found).To(BeTrue(), "new driver pod not yet Running on %s", nodeName)
+	}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+}
+
+// applyOVSDaemonSet applies the OVS daemonset manifest with the image from OVS_IMAGE.
+func applyOVSDaemonSet() {
+	GinkgoHelper()
+	raw, err := os.ReadFile(manifestPath("ovs-daemonset.yaml"))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "read ovs-daemonset.yaml")
+	manifest := strings.ReplaceAll(string(raw), "OVS_IMAGE_PLACEHOLDER", ovsImage)
+	applyYAML(manifest)
+}
+
+// stopOVSDaemonSet deletes the OVS DaemonSet and waits for all OVS pods to be gone.
+func stopOVSDaemonSet(ctx context.Context) {
+	GinkgoHelper()
+
+	err := cs.AppsV1().DaemonSets(driverNamespace).Delete(ctx, "ovs", metav1.DeleteOptions{})
+	if err != nil {
+		fmt.Fprintf(GinkgoWriter, "[stopOVS] Warning: failed to delete OVS daemonset: %v\n", err)
+	}
+
+	EventuallyWithOffset(1, func(g Gomega) {
+		pods, err := cs.CoreV1().Pods(driverNamespace).List(ctx, metav1.ListOptions{
+			LabelSelector: ovsAppLabel,
+		})
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(pods.Items).To(BeEmpty(), "OVS pods still exist")
+	}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+}
+
+// startOVSDaemonSet recreates the OVS DaemonSet by applying the manifest and waits for pods to be Running.
+func startOVSDaemonSet(ctx context.Context) {
+	GinkgoHelper()
+
+	if ovsImage == "" {
+		Fail("OVS_IMAGE environment variable must be set to start OVS daemonset")
+	}
+
+	applyOVSDaemonSet()
+
+	EventuallyWithOffset(1, func(g Gomega) {
+		pods, err := cs.CoreV1().Pods(driverNamespace).List(ctx, metav1.ListOptions{
+			LabelSelector: ovsAppLabel,
+		})
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(len(pods.Items)).To(BeNumerically(">=", 2), "expected at least 2 OVS pods")
+
+		for _, p := range pods.Items {
+			g.Expect(p.Status.Phase).To(Equal(corev1.PodRunning), "OVS pod %s not Running", p.Name)
+		}
+	}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+}
+
+// waitForResourceSlicesEmpty waits for all ResourceSlices on a node to have no devices.
+func waitForResourceSlicesEmpty(ctx context.Context, nodeName string) {
+	GinkgoHelper()
+	EventuallyWithOffset(1, func(g Gomega) {
+		slices, err := resourceSlicesForNode(ctx, nodeName)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		totalDevices := 0
+		for _, s := range slices {
+			totalDevices += len(s.Spec.Devices)
+		}
+		g.Expect(totalDevices).To(Equal(0), "ResourceSlices for node %s still have %d devices", nodeName, totalDevices)
+	}).WithTimeout(90 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
+}
+
+// restartDriverDaemonSet deletes all driver pods and waits for the DaemonSet to recreate them.
+func restartDriverDaemonSet(ctx context.Context) {
+	GinkgoHelper()
+
+	pods, err := cs.CoreV1().Pods(driverNamespace).List(ctx, metav1.ListOptions{
+		LabelSelector: driverAppLabel,
+	})
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+	oldPodNames := make(map[string]bool)
+	for _, p := range pods.Items {
+		oldPodNames[p.Name] = true
+		err = cs.CoreV1().Pods(driverNamespace).Delete(ctx, p.Name, metav1.DeleteOptions{})
+		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "delete driver pod %s", p.Name)
+	}
+
+	EventuallyWithOffset(1, func(g Gomega) {
+		pods, err := cs.CoreV1().Pods(driverNamespace).List(ctx, metav1.ListOptions{
+			LabelSelector: driverAppLabel,
+		})
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(len(pods.Items)).To(BeNumerically(">=", 2), "expected at least 2 driver pods")
+
+		for _, p := range pods.Items {
+			if oldPodNames[p.Name] {
+				g.Expect(false).To(BeTrue(), "old driver pod %s still exists", p.Name)
+			}
+			g.Expect(p.Status.Phase).To(Equal(corev1.PodRunning), "new driver pod %s not Running", p.Name)
+		}
 	}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
 }

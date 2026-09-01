@@ -58,7 +58,6 @@ const (
 	hostSocketRoot  = "/var/run/ovsdpdk"
 )
 
-
 // The labels to run each type of test suite
 const (
 	tier1           = "tier1"
@@ -113,6 +112,10 @@ var (
 	// downstream VM tests. It has no default: when empty, those tests are
 	// skipped (see the BeforeAll in e2e_downstream_test.go).
 	vmImage = os.Getenv("E2E_VM_IMAGE")
+
+	// ovsImage is the OVS image to use for the OVS daemonset. When empty,
+	// tests that require OVS daemonset lifecycle management are skipped.
+	ovsImage = os.Getenv("OVS_IMAGE")
 )
 
 func TestE2E(t *testing.T) {

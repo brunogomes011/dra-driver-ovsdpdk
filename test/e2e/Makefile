@@ -54,8 +54,8 @@ export KUBEVIRTCI_CONFIG_PATH=$(KUBEVIRTCI_CONFIG_PATH) \
        CONTAINER_HOST=unix:///run/podman/podman.sock
 endef
 
-  .PHONY: test test-openshift test-tier1 test-tier2 \
-        test-tier1-openshift test-tier2-openshift \
+.PHONY: test test-openshift test-tier1 test-tier2 \
+        test-openshift-tier1 test-openshift-tier2 \
         build-ovs-image deploy-ovs \
         cluster-up cluster-down cluster-kubeconfig podman-check \
         cluster-up-kind cluster-down-kind

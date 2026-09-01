@@ -54,12 +54,12 @@ func newPlatform() platformConfig {
 			topoBridge: "br-tdptest",
 
 			ovsUID:   "800",
-			aclEntry: "user:800",
+			aclEntry: "user:openvswitch",
 
 			configUser:    "openvswitch",
-			configGroup: "107",
+			configGroup:   "107",
 			configAclUser: "openvswitch",
-			selinuxLabel: "system_u:object_r:container_file_t:s0",
+			selinuxLabel:  "system_u:object_r:container_file_t:s0",
 		}
 	}
 	return platformConfig{
@@ -72,10 +72,9 @@ func newPlatform() platformConfig {
 		aclEntry: "user:1001",
 
 		configUser:    "1001",
-		configGroup: "107",
+		configGroup:   "107",
 		configAclUser: "1001",
-		selinuxLabel: "system_u:object_r:container_file_t:s0",
-
+		selinuxLabel:  "system_u:object_r:container_file_t:s0",
 	}
 }
 

@@ -29,8 +29,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-
-
 var _ = Describe("Claim lifecycle on worker1", Label(tier1), func() {
 	const (
 		claimName = "e2e-claim-lifecycle"
@@ -218,7 +216,6 @@ var _ = Describe("Claim with unknown device class name", Label(tier2), func() {
 	})
 })
 
-
 var _ = Describe("Claim status", Label(tier1), func() {
 	const (
 		claimName = "e2e-claim-status"
@@ -332,7 +329,6 @@ var _ = Describe("Claim status timing", Label("troubleshoot"), func() {
 		}).WithTimeout(30 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
 	})
 })
-
 
 var _ = Describe("Multiple ports from same bridge in one pod", Label(tier2), func() {
 	const podName = "e2e-pod-multi-port"
@@ -459,7 +455,6 @@ var _ = Describe("Same claim referenced by two Pods", Label("troubleshoot"), fun
 		}).WithTimeout(20 * time.Second).WithPolling(3 * time.Second).Should(Succeed())
 	})
 })
-
 
 var _ = Describe("Single claim with multiple requests", Label(tier1), func() {
 	const (

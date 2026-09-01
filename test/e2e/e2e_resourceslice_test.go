@@ -25,15 +25,13 @@ import (
 	resourceapi "k8s.io/api/resource/v1"
 )
 
-
-
 var _ = Describe("ResourceSlice advertisement", Label(tier1), func() {
 	BeforeEach(func(ctx SpecContext) {
 		applyAndCleanup(mustRenderManifest("policy.yaml.tmpl",
-			policyData{Name: "e2e-rs-policy-workers", NodeNames: []string{workers[0],workers[1]}, Bridges: []string{plat.bridge0}}))
+			policyData{Name: "e2e-rs-policy-workers", NodeNames: []string{workers[0], workers[1]}, Bridges: []string{plat.bridge0}}))
 		waitForDeviceInSlice(ctx, workers[0], plat.bridge0)
 		waitForDeviceInSlice(ctx, workers[1], plat.bridge0)
-		
+
 	})
 
 	It("each worker has at least one ResourceSlice", func(ctx SpecContext) {
