@@ -1,0 +1,326 @@
+name: E2E Tests
+
+on:
+  issue_comment:
+    types: [created]
+
+env:
+  DRIVER_IMAGE: quay.io/mcoqueli/dra-driver-ovsdpdk:76814c5-dirty
+  OVS_IMAGE: quay.io/amorenoz/ovs-dpdk-test:latest
+
+jobs:
+  # Job to check if the comment is /ok-to-test and user has permission
+  authorize:
+    name: Authorize
+    if: |
+      github.event.issue.pull_request &&
+      github.event.comment.body == '/ok-to-test'
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      pr_sha: ${{ steps.pr_info.outputs.sha }}
+      pr_ref: ${{ steps.pr_info.outputs.ref }}
+    steps:
+      - name: Check if commenter is a collaborator
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const response = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                username: context.payload.comment.user.login
+              });
+
+              const permission = response.data.permission;
+              const hasPermission = ['admin', 'write', 'maintain'].includes(permission);
+
+              if (!hasPermission) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `@${context.payload.comment.user.login} does not have permission to trigger tests. Only maintainers can use /ok-to-test.`
+                });
+                core.setOutput('should_run', 'false');
+              } else {
+                core.setOutput('should_run', 'true');
+              }
+            } catch (error) {
+              core.setFailed(`Error checking permissions: ${error.message}`);
+              core.setOutput('should_run', 'false');
+            }
+
+      - name: Get PR info
+        id: pr_info
+        if: steps.check.outputs.should_run == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            core.setOutput('sha', pr.data.head.sha);
+            core.setOutput('ref', pr.data.head.ref);
+
+      - name: Acknowledge start
+        if: steps.check.outputs.should_run == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '🚀 E2E tests triggered by @' + context.payload.comment.user.login + '\n\n' +
+                    'Running Tier 1 and Tier 2 tests...'
+            });
+
+  e2e-tier1:
+    name: E2E Tests - Tier 1
+    needs: authorize
+    if: needs.authorize.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.authorize.outputs.pr_sha }}
+
+      - name: Set commit status to pending
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: '${{ needs.authorize.outputs.pr_sha }}',
+              state: 'pending',
+              context: 'E2E Tests - Tier 1',
+              description: 'Running tier 1 tests...'
+            });
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Set up Kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: dra-ovsdpdk-e2e
+          config: test/e2e/manifests/kind-config.yaml
+
+      - name: Pull images
+        run: |
+          docker pull ${{ env.DRIVER_IMAGE }}
+          docker pull ${{ env.OVS_IMAGE }}
+
+      - name: Load images into Kind
+        run: |
+          kind load docker-image ${{ env.DRIVER_IMAGE }} --name dra-ovsdpdk-e2e
+          kind load docker-image ${{ env.OVS_IMAGE }} --name dra-ovsdpdk-e2e
+
+      - name: Deploy OVS
+        run: |
+          cd test/e2e
+          make deploy-ovs OVS_IMAGE=${{ env.OVS_IMAGE }} CONTAINER_TOOL=docker
+
+      - name: Deploy driver
+        run: |
+          kubectl apply -f deployments/crds/
+          kubectl apply -f deployments/k8s/namespace.yaml
+          kubectl apply -f deployments/k8s/rbac.yaml
+          sed 's|IMAGE|${{ env.DRIVER_IMAGE }}|g' deployments/k8s/daemonset.yaml | kubectl apply -f -
+
+      - name: Wait for driver to be ready
+        run: |
+          kubectl wait --for=condition=ready pod \
+            -l app=dra-driver-ovsdpdk \
+            -n dra-driver-ovsdpdk \
+            --timeout=5m
+
+      - name: Run Tier 1 tests
+        run: |
+          cd test/e2e
+          export KUBECONFIG=$HOME/.kube/config
+          make test-tier1
+
+      - name: Set commit status to success
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: '${{ needs.authorize.outputs.pr_sha }}',
+              state: 'success',
+              context: 'E2E Tests - Tier 1',
+              description: 'All tier 1 tests passed'
+            });
+
+      - name: Set commit status to failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: '${{ needs.authorize.outputs.pr_sha }}',
+              state: 'failure',
+              context: 'E2E Tests - Tier 1',
+              description: 'Some tier 1 tests failed'
+            });
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          kubectl get pods -A
+          kubectl describe pods -n dra-driver-ovsdpdk
+          kubectl logs -n dra-driver-ovsdpdk -l app=dra-driver-ovsdpdk --tail=100
+
+  e2e-tier2:
+    name: E2E Tests - Tier 2
+    needs: authorize
+    if: needs.authorize.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.authorize.outputs.pr_sha }}
+
+      - name: Set commit status to pending
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: '${{ needs.authorize.outputs.pr_sha }}',
+              state: 'pending',
+              context: 'E2E Tests - Tier 2',
+              description: 'Running tier 2 tests...'
+            });
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Set up Kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: dra-ovsdpdk-e2e
+          config: test/e2e/manifests/kind-config.yaml
+
+      - name: Pull images
+        run: |
+          docker pull ${{ env.DRIVER_IMAGE }}
+          docker pull ${{ env.OVS_IMAGE }}
+
+      - name: Load images into Kind
+        run: |
+          kind load docker-image ${{ env.DRIVER_IMAGE }} --name dra-ovsdpdk-e2e
+          kind load docker-image ${{ env.OVS_IMAGE }} --name dra-ovsdpdk-e2e
+
+      - name: Deploy OVS
+        run: |
+          cd test/e2e
+          make deploy-ovs OVS_IMAGE=${{ env.OVS_IMAGE }} CONTAINER_TOOL=docker
+
+      - name: Deploy driver
+        run: |
+          kubectl apply -f deployments/crds/
+          kubectl apply -f deployments/k8s/namespace.yaml
+          kubectl apply -f deployments/k8s/rbac.yaml
+          sed 's|IMAGE|${{ env.DRIVER_IMAGE }}|g' deployments/k8s/daemonset.yaml | kubectl apply -f -
+
+      - name: Wait for driver to be ready
+        run: |
+          kubectl wait --for=condition=ready pod \
+            -l app=dra-driver-ovsdpdk \
+            -n dra-driver-ovsdpdk \
+            --timeout=5m
+
+      - name: Run Tier 2 tests
+        run: |
+          cd test/e2e
+          export KUBECONFIG=$HOME/.kube/config
+          make test-tier2
+
+      - name: Set commit status to success
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: '${{ needs.authorize.outputs.pr_sha }}',
+              state: 'success',
+              context: 'E2E Tests - Tier 2',
+              description: 'All tier 2 tests passed'
+            });
+
+      - name: Set commit status to failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: '${{ needs.authorize.outputs.pr_sha }}',
+              state: 'failure',
+              context: 'E2E Tests - Tier 2',
+              description: 'Some tier 2 tests failed'
+            });
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          kubectl get pods -A
+          kubectl describe pods -n dra-driver-ovsdpdk
+          kubectl logs -n dra-driver-ovsdpdk -l app=dra-driver-ovsdpdk --tail=100
+
+  # Report final status
+  report:
+    name: Report Results
+    needs: [authorize, e2e-tier1, e2e-tier2]
+    if: always() && needs.authorize.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tier1Result = '${{ needs.e2e-tier1.result }}';
+            const tier2Result = '${{ needs.e2e-tier2.result }}';
+
+            let emoji = '✅';
+            let message = 'All E2E tests passed!';
+
+            if (tier1Result !== 'success' || tier2Result !== 'success') {
+              emoji = '❌';
+              message = 'Some E2E tests failed!';
+            }
+
+            const body = `${emoji} **E2E Test Results**\n\n` +
+                         `- Tier 1: ${tier1Result === 'success' ? '✅ Passed' : '❌ Failed'}\n` +
+                         `- Tier 2: ${tier2Result === 'success' ? '✅ Passed' : '❌ Failed'}\n\n` +
+                         `${message}`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
