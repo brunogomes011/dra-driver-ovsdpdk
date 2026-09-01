@@ -4,6 +4,12 @@ on:
   issue_comment:
     types: [created]
 
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  statuses: write
+
 env:
   DRIVER_IMAGE: quay.io/mcoqueli/dra-driver-ovsdpdk:76814c5-dirty
   OVS_IMAGE: quay.io/amorenoz/ovs-dpdk-test:latest
